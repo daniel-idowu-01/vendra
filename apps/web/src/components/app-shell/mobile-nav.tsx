@@ -13,7 +13,7 @@ const items = [
 
 export function MobileNav() {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-white/10 bg-surface/85 backdrop-blur-xl shadow-[0_-20px_60px_-35px_rgba(0,0,0,0.65)]">
+    <nav className="fixed inset-x-0 bottom-0 z-20 md:hidden border-t border-white/10 bg-surface/85 backdrop-blur-xl shadow-[0_-20px_60px_-35px_rgba(0,0,0,0.65)]">
       <div className="mx-auto grid max-w-md grid-cols-5">
         {items.map((item) => (
           <Link
