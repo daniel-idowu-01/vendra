@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 42 33% 97%;
+  --foreground: 164 18% 13%;
+  --card: 0 0% 100%;
+  --card-foreground: 164 18% 13%;
+  --primary: 154 72% 27%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 42 19% 90%;
+  --muted-foreground: 164 10% 38%;
+  --border: 42 18% 84%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: hsl(var(--background));
+}
+
+body {
+  min-height: 100%;
+  margin: 0;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}

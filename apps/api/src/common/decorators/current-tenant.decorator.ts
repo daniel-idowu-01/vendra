@@ -1,0 +1,13 @@
+import { createParamDecorator, ExecutionContext } from "@nestjs/common";
+
+export type TenantContext = {
+  organizationId: string;
+  role: "OWNER" | "ADMIN" | "STAFF";
+};
+
+export const CurrentTenant = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): TenantContext => {
+    const request = context.switchToHttp().getRequest<{ tenant: TenantContext }>();
+    return request.tenant;
+  }
+);

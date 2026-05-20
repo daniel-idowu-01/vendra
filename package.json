@@ -1,0 +1,24 @@
+{
+  "name": "vendra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WhatsApp-first business operating system for African SMEs.",
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @vendra/api --filter @vendra/web dev",
+    "dev:api": "pnpm --filter @vendra/api dev",
+    "dev:web": "pnpm --filter @vendra/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "db:generate": "pnpm --filter @vendra/database generate",
+    "db:migrate": "pnpm --filter @vendra/database migrate",
+    "db:studio": "pnpm --filter @vendra/database studio"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  }
+}
