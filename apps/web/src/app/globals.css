@@ -1,17 +1,26 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@500;600;700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --background: 42 33% 97%;
-  --foreground: 164 18% 13%;
-  --card: 0 0% 100%;
-  --card-foreground: 164 18% 13%;
-  --primary: 154 72% 27%;
-  --primary-foreground: 0 0% 100%;
-  --muted: 42 19% 90%;
-  --muted-foreground: 164 10% 38%;
-  --border: 42 18% 84%;
+  color-scheme: dark;
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --background: 225 14% 8%;
+  --surface: 223 15% 13%;
+  --surface-strong: 228 16% 18%;
+  --surface-soft: 226 14% 20%;
+  --foreground: 210 18% 96%;
+  --muted: 210 12% 62%;
+  --muted-foreground: 210 18% 72%;
+  --border: 230 14% 29%;
+  --accent: 35 95% 60%;
+  --accent-2: 178 86% 48%;
+  --accent-3: 304 80% 64%;
+  --card: 228 14% 16%;
+  --card-foreground: 210 20% 96%;
+  --shadow: 0 0% 0% / 0.2;
 }
 
 * {
@@ -20,14 +29,43 @@
 
 html {
   min-height: 100%;
-  background: hsl(var(--background));
+  background: radial-gradient(circle at top, rgba(255, 240, 208, 0.08), transparent 34%), linear-gradient(180deg, hsl(var(--background)) 0%, hsl(var(--background)) 100%);
 }
 
 body {
   min-height: 100%;
   margin: 0;
   color: hsl(var(--foreground));
-  background: hsl(var(--background));
+  background: radial-gradient(circle at 20% 10%, hsla(var(--accent), 0.18), transparent 22%), linear-gradient(180deg, hsl(var(--background)) 0%, hsl(var(--surface)) 100%);
+  font-family: var(--font-family);
+  text-rendering: optimizeLegibility;
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 18% 15%, rgba(255, 195, 60, 0.15), transparent 18%), radial-gradient(circle at 82% 8%, rgba(84, 236, 226, 0.16), transparent 22%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent), linear-gradient(90deg, rgba(255, 255, 255, 0.02), transparent);
+  opacity: 0.35;
+  pointer-events: none;
+  z-index: -1;
+  mix-blend-mode: color-dodge;
+}
+
+::selection {
+  background: rgba(255, 194, 70, 0.32);
+  color: hsl(var(--foreground));
 }
 
 button,
@@ -35,4 +73,116 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+input,
+textarea {
+  border-radius: 1.1rem;
+  border: 1px solid transparent;
+  background: hsla(var(--surface-strong), 0.94);
+  color: hsl(var(--foreground));
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+
+input:focus,
+textarea:focus {
+  border-color: hsla(var(--accent), 0.45);
+  box-shadow: 0 0 0 4px rgba(255, 195, 55, 0.12);
+  background: hsla(var(--surface-soft), 0.98);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: hsl(var(--muted));
+}
+
+.btn-base {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  border-radius: 1.05rem;
+  border: 1px solid transparent;
+  padding: 0.95rem 1.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, hsl(var(--accent)) 0%, hsl(var(--accent-2)) 60%, hsl(var(--accent-3)) 100%);
+  color: #08070a;
+  box-shadow: 0 18px 50px -30px rgba(255, 175, 0, 0.48);
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.03);
+}
+
+.btn-secondary {
+  background: hsla(var(--surface-soft), 0.96);
+  border-color: hsla(var(--border), 0.65);
+  color: hsl(var(--foreground));
+}
+
+.btn-ghost {
+  background: transparent;
+  color: hsl(var(--foreground));
+}
+
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.card-surface {
+  border-radius: 1.5rem;
+  border: 1px solid hsla(var(--border), 0.18);
+  background: linear-gradient(180deg, hsla(var(--surface), 0.95), hsla(var(--surface-strong), 0.92));
+  color: hsl(var(--card-foreground));
+  box-shadow: 0 24px 80px -42px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(18px);
+}
+
+.glass-panel {
+  border-radius: 2rem;
+  border: 1px solid hsla(var(--border), 0.16);
+  background: hsla(var(--surface), 0.92);
+  box-shadow: 0 32px 100px -60px rgba(0, 0, 0, 0.56);
+  backdrop-filter: blur(24px);
+}
+
+.input-surface {
+  width: 100%;
+  min-height: 3rem;
+  padding: 1rem 1rem;
+  border-radius: 1.1rem;
+  border: 1px solid hsla(var(--border), 0.2);
+  background: hsla(var(--surface-strong), 0.96);
+  color: hsl(var(--foreground));
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.input-surface:focus {
+  border-color: hsla(var(--accent), 0.45);
+  box-shadow: 0 0 0 4px rgba(255, 195, 55, 0.12);
+  transform: translateY(-0.5px);
+}
+
+.animate-fade-up {
+  animation: fade-up 0.9s ease-out both;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

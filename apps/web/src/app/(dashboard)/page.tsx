@@ -4,38 +4,47 @@ import { Mic, Plus, Send } from "lucide-react";
 
 export default function DashboardPage() {
   return (
-    <div className="space-y-4">
-      <section className="rounded-lg bg-primary p-5 text-primary-foreground">
-        <p className="text-sm opacity-90">Today</p>
-        <h1 className="mt-1 text-2xl font-semibold">Your business assistant is ready.</h1>
-        <p className="mt-2 text-sm opacity-90">Check stock, create invoices, and follow up debtors from WhatsApp or this dashboard.</p>
+    <div className="space-y-5 pb-10">
+      <section className="glass-panel overflow-hidden px-6 py-7 animate-fade-up">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm uppercase tracking-[0.32em] text-muted-foreground">Today</p>
+            <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-foreground">Your business assistant is ready.</h1>
+          </div>
+          <span className="rounded-full bg-accent/15 px-3 py-1 text-sm font-semibold text-accent">Live</span>
+        </div>
+        <p className="max-w-xl text-sm leading-7 text-muted-foreground">
+          Check stock, create invoices and follow up debtors from WhatsApp or this dashboard with one polished workflow.
+        </p>
       </section>
 
-      <div className="grid grid-cols-3 gap-2">
-        <Button className="h-14 flex-col gap-1 px-2">
+      <div className="grid grid-cols-3 gap-3 animate-fade-up">
+        <Button className="w-full flex-col gap-2 px-3 text-sm">
           <Plus className="h-4 w-4" /> Sale
         </Button>
-        <Button variant="secondary" className="h-14 flex-col gap-1 px-2">
+        <Button variant="secondary" className="w-full flex-col gap-2 px-3 text-sm">
           <Send className="h-4 w-4" /> Invoice
         </Button>
-        <Button variant="secondary" className="h-14 flex-col gap-1 px-2">
+        <Button variant="secondary" className="w-full flex-col gap-2 px-3 text-sm">
           <Mic className="h-4 w-4" /> Voice
         </Button>
       </div>
 
-      <Card>
-        <p className="text-sm text-muted-foreground">AI insight</p>
-        <p className="mt-1 font-medium">3 products need restocking and 2 customers have overdue balances.</p>
+      <Card className="animate-fade-up">
+        <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Insights</p>
+        <p className="mt-3 text-lg font-semibold text-foreground">
+          3 products need restocking and 2 customers have overdue balances.
+        </p>
       </Card>
 
       <div className="grid grid-cols-2 gap-3">
-        <Card>
-          <p className="text-sm text-muted-foreground">Today’s sales</p>
-          <p className="mt-2 text-2xl font-semibold">₦0</p>
+        <Card className="animate-fade-up">
+          <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Today’s sales</p>
+          <p className="mt-3 text-3xl font-semibold">₦0</p>
         </Card>
-        <Card>
-          <p className="text-sm text-muted-foreground">Open debt</p>
-          <p className="mt-2 text-2xl font-semibold">₦0</p>
+        <Card className="animate-fade-up">
+          <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Open debt</p>
+          <p className="mt-3 text-3xl font-semibold">₦0</p>
         </Card>
       </div>
     </div>
