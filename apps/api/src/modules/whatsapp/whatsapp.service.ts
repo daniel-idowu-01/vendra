@@ -1,5 +1,6 @@
 import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { Queue } from "bullmq";
 import { PrismaService } from "../../prisma/prisma.service";
 
@@ -15,7 +16,7 @@ export class WhatsAppService {
     await this.prisma.webhookEvent.upsert({
       where: { provider_providerEventId: { provider: "whatsapp", providerEventId } },
       update: {},
-      create: { provider: "whatsapp", providerEventId, payload: { signature, payload } }
+      create: { provider: "whatsapp", providerEventId, payload: { signature, payload: payload as Prisma.InputJsonValue } }
     });
     await this.queue.add("process", { providerEventId }, { jobId: providerEventId, attempts: 5, backoff: { type: "exponential", delay: 5000 } });
     return { queued: true, providerEventId };

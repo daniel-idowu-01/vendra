@@ -1,4 +1,5 @@
 import { Body, Controller, Headers, Post } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 
 @Controller({ path: "payments", version: "1" })
@@ -15,7 +16,7 @@ export class PaymentsController {
       data: {
         provider: "PAYSTACK",
         providerEventId,
-        payload: { signature, payload }
+        payload: { signature, payload: payload as Prisma.InputJsonValue }
       }
     });
   }

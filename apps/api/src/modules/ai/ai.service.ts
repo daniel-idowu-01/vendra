@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 
 type ProposedAction = {
@@ -32,7 +33,7 @@ export class AiService {
         organizationId,
         aiSessionId,
         toolName: proposed.toolName,
-        input: proposed.input,
+        input: proposed.input as Prisma.InputJsonValue,
         confidence: proposed.confidence,
         status: proposed.requiresConfirmation ? "NEEDS_CONFIRMATION" : "PROPOSED",
         validation: {
