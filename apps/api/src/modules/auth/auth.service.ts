@@ -14,7 +14,8 @@ export class AuthService {
   ) {}
 
   async signup(dto: SignupDto) {
-    const existing = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() } });
+    try {
+      const existing = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() } });
     if (existing) throw new BadRequestException("Email is already registered");
 
     const passwordHash = await argon2.hash(dto.password);
@@ -37,6 +38,10 @@ export class AuthService {
     });
 
     return this.issueTokens(result.user.id, result.user.email, result.organization.id);
+    } catch (error) {
+      console.error("Signup error:", error);
+      throw new BadRequestException("Failed to create account");
+    }
   }
 
   async login(dto: LoginDto) {

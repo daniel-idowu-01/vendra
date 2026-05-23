@@ -3,6 +3,7 @@
   "compilerOptions": {
     "baseUrl": ".",
     "jsx": "preserve",
+    "moduleResolution": "Bundler",
     "allowJs": false,
     "noEmit": true,
     "incremental": true,
