@@ -1,0 +1,95 @@
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiFetch, apiPath } from "../api-client";
+import { useAuthStore } from "../auth-store";
+
+export type Product = {
+  id: string;
+  name: string;
+  sku: string | null;
+  barcode: string | null;
+  unit: string;
+  costPrice: number;
+  sellingPrice: number;
+  lowStockLevel: number;
+};
+
+type PaginatedProducts = {
+  items: Product[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export function useProducts(page: number = 1, pageSize: number = 50) {
+  const organizationId = useAuthStore((s) => s.organizationId);
+
+  return useQuery({
+    queryKey: ["products", organizationId, page, pageSize],
+    queryFn: () =>
+      apiFetch<PaginatedProducts>(
+        apiPath("/inventory/products", { page, pageSize })
+      ),
+    enabled: !!organizationId
+  });
+}
+
+export function useCreateProduct() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: {
+      name: string;
+      sku?: string;
+      barcode?: string;
+      unit?: string;
+      costPrice?: number;
+      sellingPrice?: number;
+      lowStockLevel?: number;
+    }) => apiFetch<Product>("/inventory/products", { method: "POST", body: JSON.stringify(data) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    }
+  });
+}
+
+type StockLevel = {
+  productId: string;
+  total: number;
+  byBranch: { branchId: string; quantity: number }[];
+};
+
+export function useStockLevel(productId: string) {
+  const organizationId = useAuthStore((s) => s.organizationId);
+
+  return useQuery({
+    queryKey: ["stock-level", organizationId, productId],
+    queryFn: () =>
+      apiFetch<StockLevel>(apiPath(`/inventory/products/${productId}/stock`)),
+    enabled: !!organizationId && !!productId
+  });
+}
+
+export function useRecordTransaction() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: {
+      productId: string;
+      branchId: string;
+      type: string;
+      quantity: number;
+      note?: string;
+      idempotencyKey?: string;
+    }) =>
+      apiFetch("/inventory/transactions", {
+        method: "POST",
+        body: JSON.stringify(data)
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["low-stock"] });
+      queryClient.invalidateQueries({ queryKey: ["stock-level"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+  });
+}
