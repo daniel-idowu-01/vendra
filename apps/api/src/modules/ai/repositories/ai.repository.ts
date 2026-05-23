@@ -36,4 +36,27 @@ export class AiRepository {
       }
     });
   }
+
+  async findOrCreateSession(organizationId: string, conversationId?: string) {
+    const existing = await this.prisma.aiSession.findFirst({
+      where: { organizationId, conversationId: conversationId ?? null },
+      orderBy: { createdAt: "desc" }
+    });
+    if (existing) return existing;
+    return this.prisma.aiSession.create({
+      data: { organizationId, conversationId: conversationId ?? null }
+    });
+  }
+
+  createAiMessage(data: { aiSessionId: string; role: string; content: string }) {
+    return this.prisma.aiMessage.create({ data });
+  }
+
+  findRecentMessages(aiSessionId: string, limit = 10) {
+    return this.prisma.aiMessage.findMany({
+      where: { aiSessionId },
+      orderBy: { createdAt: "asc" },
+      take: limit
+    });
+  }
 }

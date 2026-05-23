@@ -38,7 +38,6 @@ export class WhatsAppProcessor extends WorkerHost {
 
       if (!phoneNumberId) {
         console.warn("[WhatsAppProcessor] No phone_number_id in webhook payload");
-        console.warn("[WhatsAppProcessor] Payload keys:", Object.keys(payload?.payload ?? {}));
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
@@ -46,7 +45,7 @@ export class WhatsAppProcessor extends WorkerHost {
       const account = await this.whatsappRepo.upsertWhatsAppAccount(organization.id, phoneNumberId);
 
       if (!text || !from) {
-        console.log(`[WhatsAppProcessor] Skipping non-text message (from=${from}, text=${text})`);
+        console.log(`[WhatsAppProcessor] Skipping non-text message`);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
@@ -65,8 +64,8 @@ export class WhatsAppProcessor extends WorkerHost {
       });
 
       console.log(`[WhatsAppProcessor] Classifying with Gemini...`);
-      const action = await this.ai.proposeAction(organization.id, text);
-      console.log(`[WhatsAppProcessor] Gemini: ${action.intent} (${action.toolName}) conf=${action.confidence}`);
+      const { action, sessionId } = await this.ai.proposeAction(organization.id, text, conversation.id);
+      console.log(`[WhatsAppProcessor] ${action.intent} (${action.toolName}) conf=${action.confidence}`);
 
       if (action.requiresConfirmation) {
         console.log(`[WhatsAppProcessor] Requires confirmation, sending: "${action.response}"`);
