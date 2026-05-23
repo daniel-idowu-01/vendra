@@ -1,12 +1,14 @@
 import { Processor, WorkerHost } from "@nestjs/bullmq";
 import { Job } from "bullmq";
 import { ActionExecutorService } from "../ai/action-executor.service";
-import { AiService } from "../ai/ai.service";
+import { AiService, ProposedAction } from "../ai/ai.service";
 import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 import { WhatsAppService } from "./whatsapp.service";
 
 @Processor("whatsapp-inbound")
 export class WhatsAppProcessor extends WorkerHost {
+  private pendingConfirmations = new Map<string, { action: ProposedAction; sessionId: string }>();
+
   constructor(
     private readonly whatsappRepo: WhatsAppRepository,
     private readonly ai: AiService,
@@ -63,16 +65,70 @@ export class WhatsAppProcessor extends WorkerHost {
         text
       });
 
+      const pending = this.pendingConfirmations.get(conversation.id);
+      const trimmed = text.trim().toLowerCase();
+      const isYes = /^(yes|yeah|ok|okay|sure|confirm|proceed|do it|go ahead|correct|that's right)$/i.test(trimmed);
+      const isNo = /^(no|nope|never|stop|cancel|don't|dont)$/i.test(trimmed);
+
+      if (pending && isYes) {
+        console.log(`[WhatsAppProcessor] User confirmed ${pending.action.toolName}, executing...`);
+        const result = await this.executor.execute(organization.id, pending.action);
+        const reply = pending.action.toolName === "unknown" ? pending.action.response : result;
+        await this.whatsapp.sendText(organization.id, from, reply);
+        this.pendingConfirmations.delete(conversation.id);
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        console.log(`[WhatsAppProcessor] Done processing confirmed action`);
+        return;
+      }
+
+      if (pending && isNo) {
+        console.log(`[WhatsAppProcessor] User declined ${pending.action.toolName}`);
+        await this.whatsapp.sendText(organization.id, from, "Cancelled. Let me know if you need anything else.");
+        this.pendingConfirmations.delete(conversation.id);
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        return;
+      }
+
+      if (pending && this.isSaleDetails(trimmed)) {
+        console.log(`[WhatsAppProcessor] User provided sale details, executing ${pending.action.toolName}...`);
+        pending.action.parameters = { ...pending.action.parameters, items: text, sourceText: text };
+        const result = await this.executor.execute(organization.id, pending.action);
+        const reply = pending.action.toolName === "unknown" ? pending.action.response : result;
+        await this.whatsapp.sendText(organization.id, from, reply);
+        this.pendingConfirmations.delete(conversation.id);
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        console.log(`[WhatsAppProcessor] Done processing confirmed action`);
+        return;
+      }
+
+      if (pending && this.isDebtDetails(trimmed)) {
+        console.log(`[WhatsAppProcessor] User provided debt details, executing ${pending.action.toolName}...`);
+        pending.action.parameters = { ...pending.action.parameters, sourceText: text };
+        const result = await this.executor.execute(organization.id, pending.action);
+        const reply = pending.action.toolName === "unknown" ? pending.action.response : result;
+        await this.whatsapp.sendText(organization.id, from, reply);
+        this.pendingConfirmations.delete(conversation.id);
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        console.log(`[WhatsAppProcessor] Done processing confirmed action`);
+        return;
+      }
+
       console.log(`[WhatsAppProcessor] Classifying with Gemini...`);
       const { action, sessionId } = await this.ai.proposeAction(organization.id, text, conversation.id);
       console.log(`[WhatsAppProcessor] ${action.intent} (${action.toolName}) conf=${action.confidence}`);
 
       if (action.requiresConfirmation) {
         console.log(`[WhatsAppProcessor] Requires confirmation, sending: "${action.response}"`);
+        this.pendingConfirmations.set(conversation.id, {
+          action: { ...action, requiresConfirmation: false },
+          sessionId
+        });
         await this.whatsapp.sendText(organization.id, from, action.response);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
+
+      this.pendingConfirmations.delete(conversation.id);
 
       console.log(`[WhatsAppProcessor] Executing ${action.toolName}...`);
       const result = await this.executor.execute(organization.id, action);
@@ -86,5 +142,25 @@ export class WhatsAppProcessor extends WorkerHost {
     } catch (error) {
       console.error("[WhatsAppProcessor.process] Unexpected error:", error);
     }
+  }
+
+  private isSaleDetails(text: string): boolean {
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) return false;
+    return lines.every((line) => {
+      const hasNumber = /\d+/.test(line);
+      const hasWord = /[a-zA-Z]{2,}/.test(line);
+      return hasNumber && hasWord;
+    });
+  }
+
+  private isDebtDetails(text: string): boolean {
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) return false;
+    return lines.every((line) => {
+      const hasName = /^[A-Z][a-z]+(\s+[A-Z][a-z]+)?/.test(line);
+      const hasAmount = /\d{2,}/.test(line);
+      return hasName && hasAmount;
+    });
   }
 }
