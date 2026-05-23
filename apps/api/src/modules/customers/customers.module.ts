@@ -7,6 +7,7 @@ import { CustomersRepository } from "./repositories/customers.repository";
 @Module({
   imports: [JwtModule.register({})],
   controllers: [CustomersController],
-  providers: [CustomersService, CustomersRepository]
+  providers: [CustomersService, CustomersRepository],
+  exports: [CustomersService]
 })
 export class CustomersModule {}

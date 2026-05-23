@@ -1,23 +1,90 @@
 import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { AiRepository } from "./repositories/ai.repository";
 
-type ProposedAction = {
-  intent: string;
+export type IntentType =
+  | "INVENTORY_QUERY"
+  | "INVENTORY_SALE"
+  | "DEBT_LOOKUP"
+  | "ANALYTICS_SUMMARY"
+  | "INVOICE_GENERATION"
+  | "CUSTOMER_LOOKUP"
+  | "UNKNOWN";
+
+export type ToolName =
+  | "getStockLevel"
+  | "recordSale"
+  | "listProducts"
+  | "listTopDebtors"
+  | "debtSummary"
+  | "todaySales"
+  | "lowStockAlert"
+  | "listCustomers"
+  | "unknown";
+
+export type ProposedAction = {
+  intent: IntentType;
   confidence: number;
-  toolName: string;
-  input: Record<string, unknown>;
+  toolName: ToolName;
+  parameters: Record<string, unknown>;
   requiresConfirmation: boolean;
   response: string;
 };
 
+const SYSTEM_PROMPT = `You are an AI assistant for Vendra, a business management system.
+You help business owners manage their business in real-time via WhatsApp.
+
+Available capabilities:
+- INVENTORY_QUERY: Check stock levels, find products, low stock alerts
+- INVENTORY_SALE: Record a sale or stock-out
+- DEBT_LOOKUP: Check who owes money, debt summaries
+- ANALYTICS_SUMMARY: Today's sales, business overview
+- INVOICE_GENERATION: Create invoices
+- CUSTOMER_LOOKUP: Find customer info
+
+The user is a business owner. Respond conversationally in their language.
+Only set requiresConfirmation=true for actions that modify data (sales, invoices).
+For read-only queries (stock check, debt lookup, analytics), set requiresConfirmation=false.
+
+Respond with valid JSON only, no markdown:
+{
+  "intent": "...",
+  "confidence": 0.0-1.0,
+  "toolName": "...",
+  "parameters": {},
+  "requiresConfirmation": true/false,
+  "response": "Friendly conversational reply"
+}`;
+
 @Injectable()
 export class AiService {
-  constructor(private readonly aiRepo: AiRepository) {}
+  private readonly genAI: GoogleGenerativeAI;
+  private readonly model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>;
+
+  constructor(
+    private readonly aiRepo: AiRepository,
+    private readonly config: ConfigService
+  ) {
+    const apiKey = this.config.get<string>("GEMINI_API_KEY") ?? "";
+    this.genAI = new GoogleGenerativeAI(apiKey);
+    this.model = this.genAI.getGenerativeModel({
+      model: "gemini-2.5-flash",
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: "application/json"
+      }
+    });
+  }
 
   async proposeAction(organizationId: string, message: string, aiSessionId?: string): Promise<ProposedAction> {
     try {
-      const normalized = message.toLowerCase();
-      const proposed = this.classify(normalized);
+      const result = await this.model.generateContent([
+        { text: SYSTEM_PROMPT },
+        { text: `User message: "${message}"` }
+      ]);
+      const text = result.response.text();
+      const proposed = JSON.parse(text) as ProposedAction;
 
       await this.aiRepo.createIntent({
         organizationId,
@@ -30,7 +97,7 @@ export class AiService {
         organizationId,
         aiSessionId,
         toolName: proposed.toolName,
-        input: proposed.input,
+        input: proposed.parameters,
         confidence: proposed.confidence,
         status: proposed.requiresConfirmation ? "NEEDS_CONFIRMATION" : "PROPOSED",
         validation: {
@@ -42,68 +109,14 @@ export class AiService {
     } catch (error) {
       if (error instanceof HttpException) throw error;
       console.error("[AiService.proposeAction] Unexpected error:", error);
-      throw new InternalServerErrorException("Failed to process AI action.");
-    }
-  }
-
-  private classify(message: string): ProposedAction {
-    if (message.includes("owe") || message.includes("debt")) {
       return {
-        intent: "DEBT_LOOKUP",
-        confidence: 0.82,
-        toolName: "listTopDebtors",
-        input: {},
+        intent: "UNKNOWN",
+        confidence: 0,
+        toolName: "unknown",
+        parameters: {},
         requiresConfirmation: false,
-        response: "I can check your top debtors and overdue balances."
+        response: "Sorry, I couldn't process that request right now. Please try again."
       };
     }
-    if (message.includes("invoice")) {
-      return {
-        intent: "INVOICE_GENERATION",
-        confidence: 0.74,
-        toolName: "createInvoiceDraft",
-        input: { sourceText: message },
-        requiresConfirmation: true,
-        response: "I can draft that invoice. Please confirm the customer and items before I create it."
-      };
-    }
-    if (message.includes("sold") || message.includes("stock out")) {
-      return {
-        intent: "INVENTORY_SALE_UPDATE",
-        confidence: 0.7,
-        toolName: "recordSale",
-        input: { sourceText: message },
-        requiresConfirmation: true,
-        response: "I heard a sale/stock update. Please confirm the product and quantity before I update stock."
-      };
-    }
-    if (message.includes("remain") || message.includes("stock") || message.includes("finished")) {
-      return {
-        intent: "INVENTORY_QUERY",
-        confidence: 0.78,
-        toolName: "getStockLevel",
-        input: { sourceText: message },
-        requiresConfirmation: false,
-        response: "I can check current stock levels for you."
-      };
-    }
-    if (message.includes("sales") || message.includes("today")) {
-      return {
-        intent: "ANALYTICS_SUMMARY",
-        confidence: 0.76,
-        toolName: "getTodaySales",
-        input: {},
-        requiresConfirmation: false,
-        response: "I can summarize today's sales and business alerts."
-      };
-    }
-    return {
-      intent: "UNKNOWN",
-      confidence: 0.35,
-      toolName: "askClarifyingQuestion",
-      input: { sourceText: message },
-      requiresConfirmation: false,
-      response: "I am not fully sure yet. Try asking about stock, sales, invoices, or customer debts."
-    };
   }
 }

@@ -7,6 +7,7 @@ import { AnalyticsRepository } from "./repositories/analytics.repository";
 @Module({
   imports: [JwtModule.register({})],
   controllers: [AnalyticsController],
-  providers: [AnalyticsService, AnalyticsRepository]
+  providers: [AnalyticsService, AnalyticsRepository],
+  exports: [AnalyticsService]
 })
 export class AnalyticsModule {}
