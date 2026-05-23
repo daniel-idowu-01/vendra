@@ -1,6 +1,7 @@
 import { HttpException, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { InferenceClient } from "@huggingface/inference";
 import { AiRepository } from "./repositories/ai.repository";
 
 export type IntentType =
@@ -69,12 +70,12 @@ use that to fulfill the previous intent.
 Respond with valid JSON only, no markdown, no code fences. Example:
 {"intent":"INVENTORY_QUERY","confidence":0.95,"toolName":"listProducts","parameters":{},"requiresConfirmation":false,"response":"Sure, let me pull up your products."}`;
 
-const HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.3";
-
 @Injectable()
 export class AiService {
   private readonly genAI: GoogleGenerativeAI;
   private readonly model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>;
+  private readonly hfClient: InferenceClient;
+  private readonly hfModel: string;
   private readonly hfApiKey: string;
 
   constructor(
@@ -88,6 +89,8 @@ export class AiService {
       generationConfig: { temperature: 0.2, responseMimeType: "application/json" }
     });
     this.hfApiKey = this.config.get<string>("HUGGINGFACE_API_KEY") ?? "";
+    this.hfClient = new InferenceClient(this.hfApiKey);
+    this.hfModel = "meta-llama/Llama-3.1-8B-Instruct:scaleway";
   }
 
   async proposeAction(
@@ -160,27 +163,29 @@ export class AiService {
       throw new Error("HuggingFace API key not configured");
     }
 
-    const prompt = `System: ${SYSTEM_PROMPT}\n\nConversation history:\n${contextBlock}\n\nUser: "${message}"\n\nAssistant:`;
+    try {
+      const chatCompletion = await this.hfClient.chatCompletion({
+        model: this.hfModel,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: `Conversation history:\n${contextBlock}` },
+          { role: "user", content: message }
+        ],
+        temperature: 0.2,
+        max_tokens: 500
+      });
 
-    const res = await fetch(`https://api-inference.huggingface.co/models/${HF_MODEL}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.hfApiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        inputs: prompt,
-        parameters: { temperature: 0.2, max_new_tokens: 500, return_full_text: false }
-      })
-    });
+      const raw = chatCompletion.choices[0]?.message?.content ?? "";
+      if (!raw) throw new Error("Empty response from HuggingFace");
 
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
-
-    const raw = Array.isArray(data) ? (data[0]?.generated_text ?? "") : "";
-    if (!raw) throw new Error("Empty response from HuggingFace");
-
-    return this.parseJsonResponse(raw);
+      return this.parseJsonResponse(raw);
+    } catch (err) {
+      console.error("[AiService] classifyWithHuggingFace error details:", err);
+      if ((err as any)?.httpResponse) {
+        console.error("[AiService] HuggingFace HTTP response:", JSON.stringify((err as any).httpResponse, null, 2));
+      }
+      throw err;
+    }
   }
 
   private parseJsonResponse(raw: string): ProposedAction {
