@@ -1,5 +1,5 @@
 import { InjectQueue } from "@nestjs/bullmq";
-import { Injectable } from "@nestjs/common";
+import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
 import { Queue } from "bullmq";
 import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 
@@ -11,21 +11,27 @@ export class WhatsAppService {
   ) {}
 
   async enqueueInbound(signature: string, payload: unknown) {
-    const providerEventId = this.deriveEventId(payload);
-    await this.whatsappRepo.upsertWebhookEvent(
-      {
-        provider: "whatsapp",
-        providerEventId,
-        payload: { signature, payload }
-      },
-      { provider_providerEventId: { provider: "whatsapp", providerEventId } }
-    );
-    await this.queue.add("process", { providerEventId }, {
-      jobId: providerEventId,
-      attempts: 5,
-      backoff: { type: "exponential", delay: 5000 }
-    });
-    return { queued: true, providerEventId };
+    try {
+      const providerEventId = this.deriveEventId(payload);
+      await this.whatsappRepo.upsertWebhookEvent(
+        {
+          provider: "whatsapp",
+          providerEventId,
+          payload: { signature, payload }
+        },
+        { provider_providerEventId: { provider: "whatsapp", providerEventId } }
+      );
+      await this.queue.add("process", { providerEventId }, {
+        jobId: providerEventId,
+        attempts: 5,
+        backoff: { type: "exponential", delay: 5000 }
+      });
+      return { queued: true, providerEventId };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      console.error("[WhatsAppService.enqueueInbound] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to enqueue WhatsApp message.");
+    }
   }
 
   private deriveEventId(payload: unknown) {

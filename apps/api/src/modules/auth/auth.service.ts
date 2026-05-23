@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, HttpException, Injectable, InternalServerErrorException, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import * as argon2 from "argon2";
@@ -49,26 +49,42 @@ export class AuthService {
 
       return this.issueTokens(result.user.id, result.user.email, result.organization.id);
     } catch (error) {
-      console.error("Signup error:", error);
-      throw new BadRequestException("Failed to create account");
+      if (error instanceof HttpException) throw error;
+      console.error("[AuthService.signup] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to create account. Please try again.");
     }
   }
 
   async login(dto: LoginDto) {
-    const user = await this.authRepo.findUserByEmail(dto.email.toLowerCase());
-    if (!user || !(await argon2.verify(user.passwordHash, dto.password))) {
-      throw new UnauthorizedException("Invalid email or password");
+    try {
+      const user = await this.authRepo.findUserByEmail(dto.email.toLowerCase());
+      if (!user || !(await argon2.verify(user.passwordHash, dto.password))) {
+        throw new UnauthorizedException("Invalid email or password");
+      }
+      const membership = await this.authRepo.findFirstActiveMembership(user.id);
+      return this.issueTokens(user.id, user.email, membership?.organizationId);
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      console.error("[AuthService.login] Unexpected error:", error);
+      throw new InternalServerErrorException("Login failed. Please try again.");
     }
-    const membership = await this.authRepo.findFirstActiveMembership(user.id);
-    return this.issueTokens(user.id, user.email, membership?.organizationId);
   }
 
   async refresh(refreshToken: string) {
-    const payload = this.jwt.verify<{ sub: string; email: string; organizationId?: string }>(
-      refreshToken,
-      { secret: this.config.getOrThrow<string>("JWT_REFRESH_SECRET") }
-    );
-    return this.issueTokens(payload.sub, payload.email, payload.organizationId);
+    try {
+      const payload = this.jwt.verify<{ sub: string; email: string; organizationId?: string }>(
+        refreshToken,
+        { secret: this.config.getOrThrow<string>("JWT_REFRESH_SECRET") }
+      );
+      return this.issueTokens(payload.sub, payload.email, payload.organizationId);
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      if (error instanceof Error && error.name === "JsonWebTokenError") {
+        throw new UnauthorizedException("Invalid or expired refresh token");
+      }
+      console.error("[AuthService.refresh] Unexpected error:", error);
+      throw new InternalServerErrorException("Token refresh failed. Please try again.");
+    }
   }
 
   private issueTokens(userId: string, email: string, organizationId?: string) {

@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
 import { AiRepository } from "./repositories/ai.repository";
 
 type ProposedAction = {
@@ -15,29 +15,35 @@ export class AiService {
   constructor(private readonly aiRepo: AiRepository) {}
 
   async proposeAction(organizationId: string, message: string, aiSessionId?: string): Promise<ProposedAction> {
-    const normalized = message.toLowerCase();
-    const proposed = this.classify(normalized);
+    try {
+      const normalized = message.toLowerCase();
+      const proposed = this.classify(normalized);
 
-    await this.aiRepo.createIntent({
-      organizationId,
-      name: proposed.intent,
-      confidence: proposed.confidence,
-      input: message
-    });
+      await this.aiRepo.createIntent({
+        organizationId,
+        name: proposed.intent,
+        confidence: proposed.confidence,
+        input: message
+      });
 
-    await this.aiRepo.createAction({
-      organizationId,
-      aiSessionId,
-      toolName: proposed.toolName,
-      input: proposed.input,
-      confidence: proposed.confidence,
-      status: proposed.requiresConfirmation ? "NEEDS_CONFIRMATION" : "PROPOSED",
-      validation: {
-        rule: "AI actions are proposals only; domain services validate before mutation."
-      }
-    });
+      await this.aiRepo.createAction({
+        organizationId,
+        aiSessionId,
+        toolName: proposed.toolName,
+        input: proposed.input,
+        confidence: proposed.confidence,
+        status: proposed.requiresConfirmation ? "NEEDS_CONFIRMATION" : "PROPOSED",
+        validation: {
+          rule: "AI actions are proposals only; domain services validate before mutation."
+        }
+      });
 
-    return proposed;
+      return proposed;
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      console.error("[AiService.proposeAction] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to process AI action.");
+    }
   }
 
   private classify(message: string): ProposedAction {

@@ -13,20 +13,24 @@ export class WhatsAppProcessor extends WorkerHost {
   }
 
   async process(job: Job<{ providerEventId: string }>) {
-    const event = await this.whatsappRepo.findWebhookEvent("whatsapp", job.data.providerEventId);
-    if (!event) return;
+    try {
+      const event = await this.whatsappRepo.findWebhookEvent("whatsapp", job.data.providerEventId);
+      if (!event) return;
 
-    const organization = await this.whatsappRepo.findFirstOrganization();
-    if (!organization) {
+      const organization = await this.whatsappRepo.findFirstOrganization();
+      if (!organization) {
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        return;
+      }
+
+      const text = this.extractText(event.payload);
+      if (text) {
+        await this.ai.proposeAction(organization.id, text);
+      }
       await this.whatsappRepo.markWebhookEventProcessed(event.id);
-      return;
+    } catch (error) {
+      console.error("[WhatsAppProcessor.process] Unexpected error:", error);
     }
-
-    const text = this.extractText(event.payload);
-    if (text) {
-      await this.ai.proposeAction(organization.id, text);
-    }
-    await this.whatsappRepo.markWebhookEventProcessed(event.id);
   }
 
   private extractText(payload: unknown): string | undefined {
