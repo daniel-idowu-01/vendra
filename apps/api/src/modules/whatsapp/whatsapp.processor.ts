@@ -23,6 +23,7 @@ export class WhatsAppProcessor extends WorkerHost {
 
       const organization = await this.whatsappRepo.findFirstOrganization();
       if (!organization) {
+        console.warn("[WhatsAppProcessor] No organization found, skipping");
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
@@ -36,7 +37,8 @@ export class WhatsAppProcessor extends WorkerHost {
       const phoneNumberId = change?.metadata?.phone_number_id;
 
       if (!phoneNumberId) {
-        console.warn("[WhatsAppProcessor.process] No phone_number_id in payload");
+        console.warn("[WhatsAppProcessor] No phone_number_id in webhook payload");
+        console.warn("[WhatsAppProcessor] Payload keys:", Object.keys(payload?.payload ?? {}));
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
@@ -44,12 +46,14 @@ export class WhatsAppProcessor extends WorkerHost {
       const account = await this.whatsappRepo.upsertWhatsAppAccount(organization.id, phoneNumberId);
 
       if (!text || !from) {
+        console.log(`[WhatsAppProcessor] Skipping non-text message (from=${from}, text=${text})`);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
 
-      const contact = await this.whatsappRepo.upsertContact(organization.id, account.id, from, displayName);
+      console.log(`[WhatsAppProcessor] Processing message from ${from}: "${text}"`);
 
+      const contact = await this.whatsappRepo.upsertContact(organization.id, account.id, from, displayName);
       const conversation = await this.whatsappRepo.findOrCreateConversation(organization.id, contact.id);
 
       await this.whatsappRepo.createMessage({
@@ -60,20 +64,26 @@ export class WhatsAppProcessor extends WorkerHost {
         text
       });
 
+      console.log(`[WhatsAppProcessor] Classifying with Gemini...`);
       const action = await this.ai.proposeAction(organization.id, text);
+      console.log(`[WhatsAppProcessor] Gemini: ${action.intent} (${action.toolName}) conf=${action.confidence}`);
 
       if (action.requiresConfirmation) {
+        console.log(`[WhatsAppProcessor] Requires confirmation, sending: "${action.response}"`);
         await this.whatsapp.sendText(organization.id, from, action.response);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
 
+      console.log(`[WhatsAppProcessor] Executing ${action.toolName}...`);
       const result = await this.executor.execute(organization.id, action);
       const reply = action.toolName === "unknown" ? action.response : result;
 
+      console.log(`[WhatsAppProcessor] Sending reply: "${reply?.slice(0, 80)}..."`);
       await this.whatsapp.sendText(organization.id, from, reply);
 
       await this.whatsappRepo.markWebhookEventProcessed(event.id);
+      console.log(`[WhatsAppProcessor] Done processing ${job.data.providerEventId}`);
     } catch (error) {
       console.error("[WhatsAppProcessor.process] Unexpected error:", error);
     }

@@ -23,7 +23,11 @@ export class WhatsAppController {
 
   @Post("webhook")
   receive(@Headers("x-hub-signature-256") signature: string, @Body() payload: any) {
-    console.log(payload?.entry?.[0]?.changes?.[0]?.value.messages?.[0].text.body);
+    const msg = payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    const text = msg?.text?.body;
+    if (text) {
+      console.log(`[WhatsApp] Inbound from ${msg.from}: "${text}"`);
+    }
     return this.whatsapp.enqueueInbound(signature, payload);
   }
 }
