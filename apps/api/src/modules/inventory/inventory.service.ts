@@ -1,47 +1,39 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
+import { InventoryRepository } from "./repositories/inventory.repository";
 import { PaginationDto } from "../../common/pagination/pagination.dto";
 import { CreateProductDto, StockMutationDto } from "./dto/inventory.dto";
 
 @Injectable()
 export class InventoryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly inventoryRepo: InventoryRepository,
+    private readonly prisma: PrismaService
+  ) {}
 
   async listProducts(organizationId: string, pagination: PaginationDto) {
-    const skip = (pagination.page - 1) * pagination.pageSize;
     const [items, total] = await this.prisma.$transaction([
-      this.prisma.product.findMany({
-        where: { organizationId, isActive: true },
-        orderBy: { name: "asc" },
-        skip,
-        take: pagination.pageSize
-      }),
-      this.prisma.product.count({ where: { organizationId, isActive: true } })
+      this.inventoryRepo.findProductsByOrg(organizationId, pagination),
+      this.inventoryRepo.countProductsByOrg(organizationId)
     ]);
     return { items, total, page: pagination.page, pageSize: pagination.pageSize };
   }
 
   createProduct(organizationId: string, dto: CreateProductDto) {
-    return this.prisma.product.create({
-      data: {
-        organizationId,
-        name: dto.name,
-        sku: dto.sku,
-        barcode: dto.barcode,
-        unit: dto.unit ?? "unit",
-        costPrice: dto.costPrice ?? 0,
-        sellingPrice: dto.sellingPrice ?? 0,
-        lowStockLevel: dto.lowStockLevel ?? 5
-      }
+    return this.inventoryRepo.createProduct({
+      organization: { connect: { id: organizationId } },
+      name: dto.name,
+      sku: dto.sku,
+      barcode: dto.barcode,
+      unit: dto.unit ?? "unit",
+      costPrice: dto.costPrice ?? 0,
+      sellingPrice: dto.sellingPrice ?? 0,
+      lowStockLevel: dto.lowStockLevel ?? 5
     });
   }
 
   async getStockLevel(organizationId: string, productId: string) {
-    const batches = await this.prisma.productBatch.groupBy({
-      by: ["branchId"],
-      where: { organizationId, productId },
-      _sum: { quantity: true }
-    });
+    const batches = await this.inventoryRepo.groupBatchesByBranch(organizationId, productId);
     return {
       productId,
       total: batches.reduce((sum, row) => sum + (row._sum.quantity ?? 0), 0),
@@ -56,56 +48,48 @@ export class InventoryService {
       : Math.abs(dto.quantity);
 
     return this.prisma.$transaction(async (tx) => {
-      const transaction = await tx.inventoryTransaction.create({
-        data: {
+      const transaction = await this.inventoryRepo.createTransaction({
+        organizationId,
+        productId: dto.productId,
+        branchId: dto.branchId,
+        type: dto.type,
+        quantity: signedQuantity,
+        note: dto.note,
+        idempotencyKey: dto.idempotencyKey
+      }, tx);
+
+      const existingBatch = await this.inventoryRepo.findBatch(
+        organizationId, dto.productId, dto.branchId, tx
+      );
+
+      if (existingBatch) {
+        await this.inventoryRepo.updateBatch(
+          existingBatch.id,
+          { quantity: { increment: signedQuantity } },
+          tx
+        );
+      } else {
+        await this.inventoryRepo.createBatch({
           organizationId,
           productId: dto.productId,
           branchId: dto.branchId,
-          type: dto.type,
-          quantity: signedQuantity,
-          note: dto.note,
-          idempotencyKey: dto.idempotencyKey
-        }
-      });
-
-      const existingBatch = await tx.productBatch.findFirst({
-        where: { organizationId, productId: dto.productId, branchId: dto.branchId, batchNumber: null }
-      });
-
-      if (existingBatch) {
-        await tx.productBatch.update({
-          where: { id: existingBatch.id },
-          data: { quantity: { increment: signedQuantity } }
-        });
-      } else {
-        await tx.productBatch.create({
-          data: {
-            organizationId,
-            productId: dto.productId,
-            branchId: dto.branchId,
-            quantity: signedQuantity
-          }
-        });
+          quantity: signedQuantity
+        }, tx);
       }
 
-      await tx.inventoryAuditLog.create({
-        data: {
-          organizationId,
-          productId: dto.productId,
-          action: dto.type,
-          metadata: { transactionId: transaction.id, quantity: signedQuantity }
-        }
-      });
+      await this.inventoryRepo.createAuditLog({
+        organizationId,
+        productId: dto.productId,
+        action: dto.type,
+        metadata: { transactionId: transaction.id, quantity: signedQuantity }
+      }, tx);
 
       return transaction;
     });
   }
 
   async lowStock(organizationId: string) {
-    const products = await this.prisma.product.findMany({
-      where: { organizationId, isActive: true },
-      include: { batches: true }
-    });
+    const products = await this.inventoryRepo.findProductsWithBatches(organizationId);
     return products
       .map((product) => ({
         id: product.id,

@@ -1,19 +1,15 @@
 import { Controller, Get, UseGuards } from "@nestjs/common";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
-import { PrismaService } from "../../prisma/prisma.service";
+import { OrganizationsService } from "./organizations.service";
 
 @Controller({ path: "organizations", version: "1" })
 @UseGuards(JwtAuthGuard)
 export class OrganizationsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly orgService: OrganizationsService) {}
 
   @Get()
   list(@CurrentUser() user: { sub: string }) {
-    return this.prisma.organizationMember.findMany({
-      where: { userId: user.sub, status: "ACTIVE" },
-      include: { organization: true },
-      orderBy: { createdAt: "asc" }
-    });
+    return this.orgService.listMemberships(user.sub);
   }
 }

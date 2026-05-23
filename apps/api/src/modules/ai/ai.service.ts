@@ -1,6 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
-import { PrismaService } from "../../prisma/prisma.service";
+import { AiRepository } from "./repositories/ai.repository";
 
 type ProposedAction = {
   intent: string;
@@ -13,32 +12,28 @@ type ProposedAction = {
 
 @Injectable()
 export class AiService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly aiRepo: AiRepository) {}
 
   async proposeAction(organizationId: string, message: string, aiSessionId?: string): Promise<ProposedAction> {
     const normalized = message.toLowerCase();
     const proposed = this.classify(normalized);
 
-    await this.prisma.aiIntent.create({
-      data: {
-        organizationId,
-        name: proposed.intent,
-        confidence: proposed.confidence,
-        input: message
-      }
+    await this.aiRepo.createIntent({
+      organizationId,
+      name: proposed.intent,
+      confidence: proposed.confidence,
+      input: message
     });
 
-    await this.prisma.aiAction.create({
-      data: {
-        organizationId,
-        aiSessionId,
-        toolName: proposed.toolName,
-        input: proposed.input as Prisma.InputJsonValue,
-        confidence: proposed.confidence,
-        status: proposed.requiresConfirmation ? "NEEDS_CONFIRMATION" : "PROPOSED",
-        validation: {
-          rule: "AI actions are proposals only; domain services validate before mutation."
-        }
+    await this.aiRepo.createAction({
+      organizationId,
+      aiSessionId,
+      toolName: proposed.toolName,
+      input: proposed.input,
+      confidence: proposed.confidence,
+      status: proposed.requiresConfirmation ? "NEEDS_CONFIRMATION" : "PROPOSED",
+      validation: {
+        rule: "AI actions are proposals only; domain services validate before mutation."
       }
     });
 
@@ -93,7 +88,7 @@ export class AiService {
         toolName: "getTodaySales",
         input: {},
         requiresConfirmation: false,
-        response: "I can summarize today’s sales and business alerts."
+        response: "I can summarize today's sales and business alerts."
       };
     }
     return {

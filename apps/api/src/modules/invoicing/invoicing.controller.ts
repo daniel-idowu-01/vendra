@@ -1,36 +1,9 @@
 import { Body, Controller, Get, Post, UseGuards } from "@nestjs/common";
-import { IsArray, IsNumber, IsOptional, IsString, ValidateNested } from "class-validator";
-import { Type } from "class-transformer";
 import { CurrentTenant } from "../../common/decorators/current-tenant.decorator";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { TenantGuard } from "../../common/guards/tenant.guard";
 import { InvoicingService } from "./invoicing.service";
-
-class InvoiceItemDto {
-  @IsOptional()
-  @IsString()
-  productId?: string;
-
-  @IsString()
-  name!: string;
-
-  @IsNumber()
-  quantity!: number;
-
-  @IsNumber()
-  unitPrice!: number;
-}
-
-class CreateInvoiceDto {
-  @IsOptional()
-  @IsString()
-  customerId?: string;
-
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => InvoiceItemDto)
-  items!: InvoiceItemDto[];
-}
+import { CreateInvoiceDto } from "./dto/create-invoice.dto";
 
 @Controller({ path: "invoices", version: "1" })
 @UseGuards(JwtAuthGuard, TenantGuard)

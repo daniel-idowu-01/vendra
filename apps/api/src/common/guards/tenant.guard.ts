@@ -1,9 +1,9 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
+import { AuthRepository } from "../../modules/auth/repositories/auth.repository";
 
 @Injectable()
 export class TenantGuard implements CanActivate {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly authRepo: AuthRepository) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<{
@@ -16,9 +16,7 @@ export class TenantGuard implements CanActivate {
       throw new ForbiddenException("Missing organization context");
     }
 
-    const membership = await this.prisma.organizationMember.findUnique({
-      where: { organizationId_userId: { organizationId, userId: request.user.sub } }
-    });
+    const membership = await this.authRepo.findMembershipByOrgAndUser(organizationId, request.user.sub);
     if (!membership || membership.status !== "ACTIVE") {
       throw new ForbiddenException("You do not have access to this workspace");
     }

@@ -1,24 +1,30 @@
 import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
 import { Queue } from "bullmq";
-import { PrismaService } from "../../prisma/prisma.service";
+import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 
 @Injectable()
 export class WhatsAppService {
   constructor(
     @InjectQueue("whatsapp-inbound") private readonly queue: Queue,
-    private readonly prisma: PrismaService
+    private readonly whatsappRepo: WhatsAppRepository
   ) {}
 
   async enqueueInbound(signature: string, payload: unknown) {
     const providerEventId = this.deriveEventId(payload);
-    await this.prisma.webhookEvent.upsert({
-      where: { provider_providerEventId: { provider: "whatsapp", providerEventId } },
-      update: {},
-      create: { provider: "whatsapp", providerEventId, payload: { signature, payload: payload as Prisma.InputJsonValue } }
+    await this.whatsappRepo.upsertWebhookEvent(
+      {
+        provider: "whatsapp",
+        providerEventId,
+        payload: { signature, payload }
+      },
+      { provider_providerEventId: { provider: "whatsapp", providerEventId } }
+    );
+    await this.queue.add("process", { providerEventId }, {
+      jobId: providerEventId,
+      attempts: 5,
+      backoff: { type: "exponential", delay: 5000 }
     });
-    await this.queue.add("process", { providerEventId }, { jobId: providerEventId, attempts: 5, backoff: { type: "exponential", delay: 5000 } });
     return { queued: true, providerEventId };
   }
 

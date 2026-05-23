@@ -1,26 +1,24 @@
 import { Processor, WorkerHost } from "@nestjs/bullmq";
 import { Job } from "bullmq";
 import { AiService } from "../ai/ai.service";
-import { PrismaService } from "../../prisma/prisma.service";
+import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 
 @Processor("whatsapp-inbound")
 export class WhatsAppProcessor extends WorkerHost {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly whatsappRepo: WhatsAppRepository,
     private readonly ai: AiService
   ) {
     super();
   }
 
   async process(job: Job<{ providerEventId: string }>) {
-    const event = await this.prisma.webhookEvent.findUnique({
-      where: { provider_providerEventId: { provider: "whatsapp", providerEventId: job.data.providerEventId } }
-    });
+    const event = await this.whatsappRepo.findWebhookEvent("whatsapp", job.data.providerEventId);
     if (!event) return;
 
-    const organization = await this.prisma.organization.findFirst();
+    const organization = await this.whatsappRepo.findFirstOrganization();
     if (!organization) {
-      await this.prisma.webhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+      await this.whatsappRepo.markWebhookEventProcessed(event.id);
       return;
     }
 
@@ -28,7 +26,7 @@ export class WhatsAppProcessor extends WorkerHost {
     if (text) {
       await this.ai.proposeAction(organization.id, text);
     }
-    await this.prisma.webhookEvent.update({ where: { id: event.id }, data: { processedAt: new Date() } });
+    await this.whatsappRepo.markWebhookEventProcessed(event.id);
   }
 
   private extractText(payload: unknown): string | undefined {
