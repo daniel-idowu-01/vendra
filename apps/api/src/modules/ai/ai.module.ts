@@ -10,6 +10,6 @@ import { AiRepository } from "./repositories/ai.repository";
 @Module({
   imports: [InventoryModule, DebtsModule, AnalyticsModule, CustomersModule],
   providers: [AiService, ActionExecutorService, AiRepository],
-  exports: [AiService, ActionExecutorService]
+  exports: [AiService, ActionExecutorService, AiRepository]
 })
 export class AiModule {}

@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { PrismaService } from "../../prisma/prisma.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { CustomersService } from "../customers/customers.service";
 import { DebtsService } from "../debts/debts.service";
@@ -8,6 +9,7 @@ import { type ProposedAction } from "./ai.service";
 @Injectable()
 export class ActionExecutorService {
   constructor(
+    private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
     private readonly debts: DebtsService,
     private readonly analytics: AnalyticsService,
@@ -71,6 +73,68 @@ export class ActionExecutorService {
           const lines = list.map((c: any) => `• ${c.name}${c.phone ? ` (${c.phone})` : ""}`);
           return `👥 *Customers (${list.length} total)*\n${lines.join("\n")}`;
         }
+        case "createCustomer": {
+          const name = this.extractName(parameters) ?? "New Customer";
+          const phone = this.extractPhone(parameters);
+          const customer = await this.customers.create(organizationId, { name, phone, whatsappPhone: phone });
+          return `Customer created: ${customer.name}${customer.phone ? ` (${customer.phone})` : ""}.`;
+        }
+        case "createProduct": {
+          const name = this.extractName(parameters) ?? "New Product";
+          const price = this.extractAmount(parameters) ?? 0;
+          const product = await this.inventory.createProduct(organizationId, { name, sellingPrice: price, unit: "unit" });
+          return `Product created: ${product.name} at ₦${Number(product.sellingPrice).toLocaleString()}.`;
+        }
+        case "recordDebt": {
+          const customerName = this.extractName(parameters) ?? "Customer";
+          const amount = this.extractAmount(parameters) ?? 0;
+          const customer = await this.prisma.customer.upsert({
+            where: { organizationId_name: { organizationId, name: customerName } } as any,
+            update: {},
+            create: { organizationId, name: customerName }
+          });
+          await this.prisma.debtRecord.create({
+            data: {
+              organizationId,
+              customerId: customer.id,
+              originalAmount: amount,
+              outstanding: amount,
+              status: "OPEN"
+            }
+          });
+          return `Debt recorded for ${customer.name}: ₦${amount.toLocaleString()}.`;
+        }
+        case "recordSale": {
+          const source = String(parameters.items ?? parameters.sourceText ?? "");
+          const lines = source.split("\n").map((line) => line.trim()).filter(Boolean);
+          const branch = await this.prisma.branch.findFirst({ where: { organizationId }, orderBy: { createdAt: "asc" } });
+          if (!branch) return "I could not record the sale because no branch exists yet.";
+          let total = 0;
+          let recorded = 0;
+          for (const line of lines) {
+            const parsed = line.match(/(\d+)\s+(.+?)\s+(?:for|@)\s*([\d,]+(?:\.\d+)?)/i);
+            if (!parsed) continue;
+            const qty = Number(parsed[1]);
+            const name = parsed[2].trim();
+            const unitPrice = Number(parsed[3].replace(/,/g, ""));
+            const product = await this.prisma.product.upsert({
+              where: { organizationId_name: { organizationId, name } } as any,
+              update: { sellingPrice: unitPrice },
+              create: { organizationId, name, sellingPrice: unitPrice, unit: "unit", lowStockLevel: 5 }
+            });
+            await this.inventory.recordTransaction(organizationId, {
+              productId: product.id,
+              branchId: branch.id,
+              type: "SALE",
+              quantity: qty,
+              note: `WhatsApp AI sale: ${line}`
+            });
+            recorded += 1;
+            total += qty * unitPrice;
+          }
+          if (recorded === 0) return "I could not parse sale lines. Use format: `1 White shirt for 10000`.";
+          return `Sale recorded: ${recorded} item line(s), total ₦${total.toLocaleString()}.`;
+        }
 
         default:
           return response;
@@ -79,5 +143,34 @@ export class ActionExecutorService {
       console.error(`[ActionExecutorService.execute] Error executing ${toolName}:`, error);
       return "Sorry, I ran into an error while processing your request. Please try again.";
     }
+  }
+
+  private extractAmount(parameters: Record<string, unknown>): number | null {
+    const fromParam = parameters.amount;
+    if (typeof fromParam === "number") return fromParam;
+    if (typeof fromParam === "string") return this.parseNumber(fromParam);
+    const source = String(parameters.sourceText ?? parameters.items ?? "");
+    return this.parseNumber(source);
+  }
+
+  private extractName(parameters: Record<string, unknown>): string | null {
+    if (typeof parameters.customerName === "string") return parameters.customerName;
+    if (typeof parameters.name === "string") return parameters.name;
+    const source = String(parameters.sourceText ?? "");
+    const match = source.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
+    return match?.[1] ?? null;
+  }
+
+  private extractPhone(parameters: Record<string, unknown>): string | undefined {
+    const source = String(parameters.sourceText ?? "");
+    const match = source.match(/(?:\+?\d[\d\s-]{7,}\d)/);
+    return match ? match[0].replace(/\s|-/g, "") : undefined;
+  }
+
+  private parseNumber(input: string): number | null {
+    const cleaned = input.replace(/,/g, "");
+    const match = cleaned.match(/(\d+(?:\.\d+)?)/);
+    if (!match) return null;
+    return Number(match[1]);
   }
 }

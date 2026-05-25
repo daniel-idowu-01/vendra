@@ -2,16 +2,16 @@ import { Processor, WorkerHost } from "@nestjs/bullmq";
 import { Job } from "bullmq";
 import { ActionExecutorService } from "../ai/action-executor.service";
 import { AiService, ProposedAction } from "../ai/ai.service";
+import { AiRepository } from "../ai/repositories/ai.repository";
 import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 import { WhatsAppService } from "./whatsapp.service";
 
 @Processor("whatsapp-inbound")
 export class WhatsAppProcessor extends WorkerHost {
-  private pendingConfirmations = new Map<string, { action: ProposedAction; sessionId: string }>();
-
   constructor(
     private readonly whatsappRepo: WhatsAppRepository,
     private readonly ai: AiService,
+    private readonly aiRepo: AiRepository,
     private readonly executor: ActionExecutorService,
     private readonly whatsapp: WhatsAppService
   ) {
@@ -65,70 +65,74 @@ export class WhatsAppProcessor extends WorkerHost {
         text
       });
 
-      const pending = this.pendingConfirmations.get(conversation.id);
+      const pending = await this.aiRepo.findLatestPendingActionForConversation(organization.id, conversation.id);
       const trimmed = text.trim().toLowerCase();
       const isYes = /^(yes|yeah|ok|okay|sure|confirm|proceed|do it|go ahead|correct|that's right)$/i.test(trimmed);
       const isNo = /^(no|nope|never|stop|cancel|don't|dont)$/i.test(trimmed);
 
       if (pending && isYes) {
-        console.log(`[WhatsAppProcessor] User confirmed ${pending.action.toolName}, executing...`);
-        const result = await this.executor.execute(organization.id, pending.action);
-        const reply = pending.action.toolName === "unknown" ? pending.action.response : result;
+        const action = this.toProposedAction((pending.input as Record<string, unknown>) ?? {}, pending.toolName);
+        console.log(`[WhatsAppProcessor] User confirmed ${action.toolName}, executing...`);
+        await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { confirmationReply: text });
+        const result = await this.executor.execute(organization.id, action);
+        const reply = action.toolName === "unknown" ? action.response : result;
+        await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { reply });
         await this.whatsapp.sendText(organization.id, from, reply);
-        this.pendingConfirmations.delete(conversation.id);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         console.log(`[WhatsAppProcessor] Done processing confirmed action`);
         return;
       }
 
       if (pending && isNo) {
-        console.log(`[WhatsAppProcessor] User declined ${pending.action.toolName}`);
+        console.log(`[WhatsAppProcessor] User declined ${pending.toolName}`);
+        await this.aiRepo.updateActionStatus(pending.id, "REJECTED", { rejectionReply: text });
         await this.whatsapp.sendText(organization.id, from, "Cancelled. Let me know if you need anything else.");
-        this.pendingConfirmations.delete(conversation.id);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
 
       if (pending && this.isSaleDetails(trimmed)) {
-        console.log(`[WhatsAppProcessor] User provided sale details, executing ${pending.action.toolName}...`);
-        pending.action.parameters = { ...pending.action.parameters, items: text, sourceText: text };
-        const result = await this.executor.execute(organization.id, pending.action);
-        const reply = pending.action.toolName === "unknown" ? pending.action.response : result;
+        const action = this.toProposedAction(
+          { ...(pending.input as Record<string, unknown>), items: text, sourceText: text },
+          pending.toolName
+        );
+        console.log(`[WhatsAppProcessor] User provided sale details, executing ${action.toolName}...`);
+        await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { detailsReply: text });
+        const result = await this.executor.execute(organization.id, action);
+        const reply = action.toolName === "unknown" ? action.response : result;
+        await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { reply });
         await this.whatsapp.sendText(organization.id, from, reply);
-        this.pendingConfirmations.delete(conversation.id);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         console.log(`[WhatsAppProcessor] Done processing confirmed action`);
         return;
       }
 
       if (pending && this.isDebtDetails(trimmed)) {
-        console.log(`[WhatsAppProcessor] User provided debt details, executing ${pending.action.toolName}...`);
-        pending.action.parameters = { ...pending.action.parameters, sourceText: text };
-        const result = await this.executor.execute(organization.id, pending.action);
-        const reply = pending.action.toolName === "unknown" ? pending.action.response : result;
+        const action = this.toProposedAction(
+          { ...(pending.input as Record<string, unknown>), sourceText: text },
+          pending.toolName
+        );
+        console.log(`[WhatsAppProcessor] User provided debt details, executing ${action.toolName}...`);
+        await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { detailsReply: text });
+        const result = await this.executor.execute(organization.id, action);
+        const reply = action.toolName === "unknown" ? action.response : result;
+        await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { reply });
         await this.whatsapp.sendText(organization.id, from, reply);
-        this.pendingConfirmations.delete(conversation.id);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         console.log(`[WhatsAppProcessor] Done processing confirmed action`);
         return;
       }
 
       console.log(`[WhatsAppProcessor] Classifying with Gemini...`);
-      const { action, sessionId } = await this.ai.proposeAction(organization.id, text, conversation.id);
+      const { action } = await this.ai.proposeAction(organization.id, text, conversation.id);
       console.log(`[WhatsAppProcessor] ${action.intent} (${action.toolName}) conf=${action.confidence}`);
 
       if (action.requiresConfirmation) {
         console.log(`[WhatsAppProcessor] Requires confirmation, sending: "${action.response}"`);
-        this.pendingConfirmations.set(conversation.id, {
-          action: { ...action, requiresConfirmation: false },
-          sessionId
-        });
         await this.whatsapp.sendText(organization.id, from, action.response);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
-
-      this.pendingConfirmations.delete(conversation.id);
 
       console.log(`[WhatsAppProcessor] Executing ${action.toolName}...`);
       const result = await this.executor.execute(organization.id, action);
@@ -142,6 +146,17 @@ export class WhatsAppProcessor extends WorkerHost {
     } catch (error) {
       console.error("[WhatsAppProcessor.process] Unexpected error:", error);
     }
+  }
+
+  private toProposedAction(parameters: Record<string, unknown>, toolName: string): ProposedAction {
+    return {
+      intent: "UNKNOWN",
+      confidence: 1,
+      toolName: (toolName as ProposedAction["toolName"]) ?? "unknown",
+      parameters,
+      requiresConfirmation: false,
+      response: ""
+    };
   }
 
   private isSaleDetails(text: string): boolean {

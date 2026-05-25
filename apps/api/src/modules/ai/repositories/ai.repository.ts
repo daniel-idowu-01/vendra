@@ -37,6 +37,32 @@ export class AiRepository {
     });
   }
 
+  findLatestPendingActionForConversation(organizationId: string, conversationId: string) {
+    return this.prisma.aiAction.findFirst({
+      where: {
+        organizationId,
+        status: "NEEDS_CONFIRMATION" as any,
+        session: { conversationId }
+      },
+      orderBy: { createdAt: "desc" }
+    });
+  }
+
+  updateActionStatus(
+    id: string,
+    status: "APPROVED" | "EXECUTED" | "REJECTED" | "FAILED",
+    result?: Record<string, unknown>
+  ) {
+    return this.prisma.aiAction.update({
+      where: { id },
+      data: {
+        status: status as any,
+        executedAt: status === "EXECUTED" || status === "FAILED" ? new Date() : undefined,
+        result: result as unknown as Prisma.InputJsonValue
+      }
+    });
+  }
+
   async findOrCreateSession(organizationId: string, conversationId?: string) {
     const existing = await this.prisma.aiSession.findFirst({
       where: { organizationId, conversationId: conversationId ?? null },
