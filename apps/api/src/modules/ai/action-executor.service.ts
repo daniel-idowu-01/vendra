@@ -25,7 +25,7 @@ export class ActionExecutorService {
           const productId = parameters.productId as string | undefined;
           if (!productId) {
             const products = await this.inventory.listProducts(organizationId, { page: 1, pageSize: 100 });
-            return `📦 *Product List*\n${products.items.slice(0, 10).map((p: any) => `• ${p.name} (SKU: ${p.sku ?? "N/A"}) - $${p.sellingPrice}`).join("\n")}\n\nReply with the product name to check stock.`;
+            return `📦 *Product List*\n${products.items.slice(0, 10).map((p: any) => `• ${p.name} (SKU: ${p.sku ?? "N/A"}) - ₦${Number(p.sellingPrice).toLocaleString()}`).join("\n")}\n\nReply with the product name to check stock.`;
           }
           const stock = await this.inventory.getStockLevel(organizationId, productId);
           return `📊 *Stock Level*\nTotal: ${stock.total} units\n${stock.byBranch.map((b: any) => `Branch: ${b.quantity}`).join("\n")}`;
@@ -35,7 +35,7 @@ export class ActionExecutorService {
           const products = await this.inventory.listProducts(organizationId, { page: 1, pageSize: 25 });
           if (products.items.length === 0) return "No products found in your inventory.";
           const lines = products.items.map((p: any, i: number) =>
-            `${i + 1}. ${p.name} — $${p.sellingPrice} (${p.unit})`
+            `${i + 1}. ${p.name} — ₦${Number(p.sellingPrice).toLocaleString()} (${p.unit})`
           );
           return `📦 *Products (${products.total} total)*\n${lines.join("\n")}`;
         }
@@ -50,21 +50,21 @@ export class ActionExecutorService {
           const summary = await this.debts.summary(organizationId);
           if (summary.count === 0) return "🎉 No open debts. All customers are up to date!";
           const lines = summary.topDebtors.map((d: any, i: number) =>
-            `${i + 1}. ${d.customer} — $${Number(d.outstanding).toFixed(2)} (due ${new Date(d.dueDate).toLocaleDateString()})`
+            `${i + 1}. ${d.customer} — ₦${Number(d.outstanding).toLocaleString()} (due ${new Date(d.dueDate).toLocaleDateString()})`
           );
-          return `💰 *Debt Summary*\nTotal outstanding: $${Number(summary.outstanding).toFixed(2)}\n${lines.join("\n")}`;
+          return `💰 *Debt Summary*\nTotal outstanding: ₦${Number(summary.outstanding).toLocaleString()}\n${lines.join("\n")}`;
         }
 
         case "debtSummary": {
           const debts = await this.debts.list(organizationId);
           if (debts.length === 0) return "No debt records found.";
           const total = debts.reduce((s: number, d: any) => s + Number(d.outstanding), 0);
-          return `📋 *All Debts (${debts.length} records)*\nOutstanding total: $${total.toFixed(2)}\n\nTop: ${debts.slice(0, 5).map((d: any) => `${d.customer.name}: $${Number(d.outstanding).toFixed(2)}`).join("\n")}`;
+          return `📋 *All Debts (${debts.length} records)*\nOutstanding total: ₦${total.toLocaleString()}\n\nTop: ${debts.slice(0, 5).map((d: any) => `${d.customer.name}: ₦${Number(d.outstanding).toLocaleString()}`).join("\n")}`;
         }
 
         case "todaySales": {
           const dash = await this.analytics.dashboard(organizationId);
-          return `📈 *Today's Overview*\nSales: $${Number(dash.todaySales).toFixed(2)}\nDebts: $${Number(dash.openDebt).toFixed(2)}\nLow stock items: ${dash.lowStockCount}\n\n${dash.insights.join("\n")}`;
+          return `📈 *Today's Overview*\nSales: ₦${Number(dash.todaySales).toLocaleString()}\nDebts: ₦${Number(dash.openDebt).toLocaleString()}\nLow stock items: ${dash.lowStockCount}\n\n${dash.insights.join("\n")}`;
         }
 
         case "listCustomers": {
@@ -159,11 +159,14 @@ export class ActionExecutorService {
   }
 
   private extractName(parameters: Record<string, unknown>): string | null {
+    const source = String(parameters.sourceText ?? parameters.items ?? "");
+    if (source) {
+      const match = source.match(/^(\w+)/);
+      if (match) return match[1];
+    }
     if (typeof parameters.customerName === "string") return parameters.customerName;
     if (typeof parameters.name === "string") return parameters.name;
-    const source = String(parameters.sourceText ?? "");
-    const match = source.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
-    return match?.[1] ?? null;
+    return null;
   }
 
   private extractPhone(parameters: Record<string, unknown>): string | undefined {

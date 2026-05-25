@@ -91,12 +91,12 @@ export class WhatsAppProcessor extends WorkerHost {
         return;
       }
 
-      if (pending && this.isSaleDetails(trimmed)) {
+      if (pending && pending.toolName === "recordDebt" && this.isDebtDetails(text)) {
         const action = this.toProposedAction(
-          { ...(pending.input as Record<string, unknown>), items: text, sourceText: text },
+          { ...(pending.input as Record<string, unknown>), sourceText: text },
           pending.toolName
         );
-        console.log(`[WhatsAppProcessor] User provided sale details, executing ${action.toolName}...`);
+        console.log(`[WhatsAppProcessor] User provided debt details, executing ${action.toolName}...`);
         await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { detailsReply: text });
         const result = await this.executor.execute(organization.id, action);
         const reply = action.toolName === "unknown" ? action.response : result;
@@ -107,12 +107,12 @@ export class WhatsAppProcessor extends WorkerHost {
         return;
       }
 
-      if (pending && this.isDebtDetails(trimmed)) {
+      if (pending && pending.toolName === "recordSale" && this.isSaleDetails(text)) {
         const action = this.toProposedAction(
           { ...(pending.input as Record<string, unknown>), sourceText: text },
           pending.toolName
         );
-        console.log(`[WhatsAppProcessor] User provided debt details, executing ${action.toolName}...`);
+        console.log(`[WhatsAppProcessor] User provided sale details, executing ${action.toolName}...`);
         await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { detailsReply: text });
         const result = await this.executor.execute(organization.id, action);
         const reply = action.toolName === "unknown" ? action.response : result;
@@ -163,9 +163,7 @@ export class WhatsAppProcessor extends WorkerHost {
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
     if (lines.length === 0) return false;
     return lines.every((line) => {
-      const hasNumber = /\d+/.test(line);
-      const hasWord = /[a-zA-Z]{2,}/.test(line);
-      return hasNumber && hasWord;
+      return /^\d+\s+.+\s+(?:for|@)\s*\d+/i.test(line);
     });
   }
 
@@ -173,7 +171,7 @@ export class WhatsAppProcessor extends WorkerHost {
     const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
     if (lines.length === 0) return false;
     return lines.every((line) => {
-      const hasName = /^[A-Z][a-z]+(\s+[A-Z][a-z]+)?/.test(line);
+      const hasName = /^[A-Za-z][a-z]+(\s+[A-Za-z][a-z]+)?/.test(line);
       const hasAmount = /\d{2,}/.test(line);
       return hasName && hasAmount;
     });
