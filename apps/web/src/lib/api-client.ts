@@ -2,20 +2,51 @@ import { useAuthStore } from "./auth-store";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const { accessToken, organizationId } = useAuthStore.getState();
-  const response = await fetch(`${API_URL}/api/v1${path}`, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
-      ...(organizationId ? { "x-organization-id": organizationId } : {}),
-      ...init.headers
-    }
-  });
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public body: { message?: string; details?: unknown }
+  ) {
+    super(body.message ?? `Request failed with ${status}`);
+    this.name = "ApiError";
+  }
+}
 
+async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    throw new Error(`Request failed with ${response.status}`);
+    let body: { message?: string; details?: unknown } = {};
+    try {
+      body = await response.json();
+    } catch {
+      body = { message: `Request failed with ${response.status}` };
+    }
+    throw new ApiError(response.status, body);
   }
   return response.json() as Promise<T>;
+}
+
+export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const { accessToken, organizationId } = useAuthStore.getState();
+  const headers: Record<string, string> = {
+    "content-type": "application/json"
+  };
+  if (accessToken) headers.authorization = `Bearer ${accessToken}`;
+  if (organizationId) headers["x-organization-id"] = organizationId;
+
+  const response = await fetch(`${API_URL}/api/v1${path}`, {
+    ...init,
+    headers: { ...headers, ...(init.headers as Record<string, string> | undefined) }
+  });
+
+  return handleResponse<T>(response);
+}
+
+export function apiPath(path: string, params?: Record<string, string | number | undefined>): string {
+  if (!params) return path;
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) search.set(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `${path}?${qs}` : path;
 }

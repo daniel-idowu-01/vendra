@@ -2,8 +2,8 @@ import { BullModule } from "@nestjs/bullmq";
 import { Module } from "@nestjs/common";
 import { ConfigModule, ConfigService } from "@nestjs/config";
 import { ThrottlerModule } from "@nestjs/throttler";
-import path from "path";
 import { validateEnv } from "./common/config/env.validation";
+import { QueuesModule } from "./modules/queues/queues.module";
 import { AiModule } from "./modules/ai/ai.module";
 import { AnalyticsModule } from "./modules/analytics/analytics.module";
 import { AuthModule } from "./modules/auth/auth.module";
@@ -20,7 +20,6 @@ import { PrismaModule } from "./prisma/prisma.module";
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: [path.resolve(__dirname, "../../../.env")],
       validate: validateEnv
     }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
@@ -40,7 +39,8 @@ import { PrismaModule } from "./prisma/prisma.module";
     PaymentsModule,
     WhatsAppModule,
     AiModule,
-    AnalyticsModule
+    AnalyticsModule,
+    QueuesModule
   ]
 })
 export class AppModule {}

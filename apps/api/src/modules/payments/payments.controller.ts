@@ -1,23 +1,12 @@
 import { Body, Controller, Headers, Post } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
-import { PrismaService } from "../../prisma/prisma.service";
+import { PaymentsService } from "./payments.service";
 
 @Controller({ path: "payments", version: "1" })
 export class PaymentsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly paymentsService: PaymentsService) {}
 
   @Post("paystack/webhook")
-  async paystackWebhook(@Headers("x-paystack-signature") signature: string, @Body() payload: unknown) {
-    const providerEventId =
-      typeof payload === "object" && payload && "event" in payload
-        ? `${String((payload as { event: unknown }).event)}-${Date.now()}`
-        : `paystack-${Date.now()}`;
-    return this.prisma.paymentProviderEvent.create({
-      data: {
-        provider: "PAYSTACK",
-        providerEventId,
-        payload: { signature, payload: payload as Prisma.InputJsonValue }
-      }
-    });
+  paystackWebhook(@Headers("x-paystack-signature") signature: string, @Body() payload: unknown) {
+    return this.paymentsService.handlePaystackWebhook(signature, payload);
   }
 }

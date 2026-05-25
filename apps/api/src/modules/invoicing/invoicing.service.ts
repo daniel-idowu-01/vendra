@@ -1,5 +1,5 @@
-import { Injectable } from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
+import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { InvoicingRepository } from "./repositories/invoicing.repository";
 
 type CreateInvoiceInput = {
   customerId?: string;
@@ -8,38 +8,42 @@ type CreateInvoiceInput = {
 
 @Injectable()
 export class InvoicingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly invoicingRepo: InvoicingRepository) {}
 
-  list(organizationId: string) {
-    return this.prisma.invoice.findMany({
-      where: { organizationId },
-      include: { customer: true, items: true },
-      orderBy: { createdAt: "desc" },
-      take: 50
-    });
+  async list(organizationId: string) {
+    try {
+      return await this.invoicingRepo.findManyByOrg(organizationId);
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      console.error("[InvoicingService.list] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to retrieve invoices.");
+    }
   }
 
   async createDraft(organizationId: string, input: CreateInvoiceInput) {
-    const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-    const invoiceNumber = `INV-${Date.now().toString(36).toUpperCase()}`;
-    return this.prisma.invoice.create({
-      data: {
-        organizationId,
-        customerId: input.customerId,
+    try {
+      const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+      const invoiceNumber = `INV-${Date.now().toString(36).toUpperCase()}`;
+      return await this.invoicingRepo.create({
+        organization: { connect: { id: organizationId } },
+        ...(input.customerId ? { customer: { connect: { id: input.customerId } } } : {}),
         invoiceNumber,
         subtotal,
         totalAmount: subtotal,
         items: {
           create: input.items.map((item) => ({
-            productId: item.productId,
+            ...(item.productId ? { product: { connect: { id: item.productId } } } : {}),
             name: item.name,
             quantity: item.quantity,
             unitPrice: item.unitPrice,
             totalAmount: item.quantity * item.unitPrice
           }))
         }
-      },
-      include: { items: true, customer: true }
-    });
+      });
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      console.error("[InvoicingService.createDraft] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to create invoice draft.");
+    }
   }
 }

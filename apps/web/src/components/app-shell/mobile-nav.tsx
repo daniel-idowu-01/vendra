@@ -4,11 +4,11 @@ import Link from "next/link";
 import { BarChart3, Boxes, FileText, HandCoins, MessageCircle } from "lucide-react";
 
 const items = [
-  { href: "/", label: "Home", icon: MessageCircle },
-  { href: "/inventory", label: "Stock", icon: Boxes },
-  { href: "/invoices", label: "Invoice", icon: FileText },
-  { href: "/debts", label: "Debts", icon: HandCoins },
-  { href: "/analytics", label: "Sales", icon: BarChart3 }
+  { href: "/" as const, label: "Home", icon: MessageCircle },
+  { href: "/inventory" as const, label: "Stock", icon: Boxes },
+  { href: "/invoices" as const, label: "Invoice", icon: FileText },
+  { href: "/debts" as const, label: "Debts", icon: HandCoins },
+  { href: "/analytics" as const, label: "Sales", icon: BarChart3 }
 ];
 
 export function MobileNav() {

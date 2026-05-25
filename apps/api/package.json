@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "powershell -NoLogo -Command \"netstat -ano | Select-String ':4000' | ForEach-Object { $t = $_ -split '\\s+'; $p = $t[$t.Count-1]; if ($p -match '^\\d+$') { Stop-Process -Id $p -Force } }\"",
     "dev": "nest start --watch",
     "build": "nest build",
     "start": "node dist/main.js",
@@ -11,6 +12,8 @@
     "test": "jest --passWithNoTests"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@huggingface/inference": "^4.13.18",
     "@nestjs/bullmq": "^10.2.3",
     "@nestjs/common": "^10.4.15",
     "@nestjs/config": "^3.3.0",

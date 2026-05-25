@@ -1,61 +1,90 @@
-import { BadRequestException, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, HttpException, Injectable, InternalServerErrorException, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import * as argon2 from "argon2";
 import { PrismaService } from "../../prisma/prisma.service";
+import { AuthRepository } from "./repositories/auth.repository";
 import { LoginDto, SignupDto } from "./dto/auth.dto";
 
 @Injectable()
 export class AuthService {
   constructor(
+    private readonly authRepo: AuthRepository,
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService
   ) {}
 
   async signup(dto: SignupDto) {
-    const existing = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() } });
-    if (existing) throw new BadRequestException("Email is already registered");
+    try {
+      const existing = await this.authRepo.findUserByEmail(dto.email.toLowerCase());
+      if (existing) throw new BadRequestException("Email is already registered");
 
-    const passwordHash = await argon2.hash(dto.password);
-    const slug = dto.organizationName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const passwordHash = await argon2.hash(dto.password);
+      const slug = dto.organizationName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: { email: dto.email.toLowerCase(), name: dto.name, passwordHash }
+      const result = await this.prisma.$transaction(async (tx) => {
+        const user = await this.authRepo.createUser(
+          { email: dto.email.toLowerCase(), name: dto.name, passwordHash },
+          tx
+        );
+        const organization = await this.authRepo.createOrganization(
+          { name: dto.organizationName, slug: `${slug}-${Date.now().toString(36)}` },
+          tx
+        );
+        await this.authRepo.createOrganizationMember(
+          {
+            organization: { connect: { id: organization.id } },
+            user: { connect: { id: user.id } },
+            role: "OWNER"
+          },
+          tx
+        );
+        await this.authRepo.createBranch(
+          { organization: { connect: { id: organization.id } }, name: "Main branch" },
+          tx
+        );
+        return { user, organization };
       });
-      const organization = await tx.organization.create({
-        data: { name: dto.organizationName, slug: `${slug}-${Date.now().toString(36)}` }
-      });
-      await tx.organizationMember.create({
-        data: { organizationId: organization.id, userId: user.id, role: "OWNER" }
-      });
-      await tx.branch.create({
-        data: { organizationId: organization.id, name: "Main branch" }
-      });
-      return { user, organization };
-    });
 
-    return this.issueTokens(result.user.id, result.user.email, result.organization.id);
+      return this.issueTokens(result.user.id, result.user.email, result.organization.id);
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      console.error("[AuthService.signup] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to create account. Please try again.");
+    }
   }
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() } });
-    if (!user || !(await argon2.verify(user.passwordHash, dto.password))) {
-      throw new UnauthorizedException("Invalid email or password");
+    try {
+      const user = await this.authRepo.findUserByEmail(dto.email.toLowerCase());
+      if (!user || !(await argon2.verify(user.passwordHash, dto.password))) {
+        throw new UnauthorizedException("Invalid email or password");
+      }
+      const membership = await this.authRepo.findFirstActiveMembership(user.id);
+      return this.issueTokens(user.id, user.email, membership?.organizationId);
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      console.error("[AuthService.login] Unexpected error:", error);
+      throw new InternalServerErrorException("Login failed. Please try again.");
     }
-    const membership = await this.prisma.organizationMember.findFirst({
-      where: { userId: user.id, status: "ACTIVE" },
-      orderBy: { createdAt: "asc" }
-    });
-    return this.issueTokens(user.id, user.email, membership?.organizationId);
   }
 
   async refresh(refreshToken: string) {
-    const payload = this.jwt.verify<{ sub: string; email: string; organizationId?: string }>(refreshToken, {
-      secret: this.config.getOrThrow<string>("JWT_REFRESH_SECRET")
-    });
-    return this.issueTokens(payload.sub, payload.email, payload.organizationId);
+    try {
+      const payload = this.jwt.verify<{ sub: string; email: string; organizationId?: string }>(
+        refreshToken,
+        { secret: this.config.getOrThrow<string>("JWT_REFRESH_SECRET") }
+      );
+      return this.issueTokens(payload.sub, payload.email, payload.organizationId);
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      if (error instanceof Error && error.name === "JsonWebTokenError") {
+        throw new UnauthorizedException("Invalid or expired refresh token");
+      }
+      console.error("[AuthService.refresh] Unexpected error:", error);
+      throw new InternalServerErrorException("Token refresh failed. Please try again.");
+    }
   }
 
   private issueTokens(userId: string, email: string, organizationId?: string) {
