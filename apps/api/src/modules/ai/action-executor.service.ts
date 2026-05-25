@@ -88,11 +88,10 @@ export class ActionExecutorService {
         case "recordDebt": {
           const customerName = this.extractName(parameters) ?? "Customer";
           const amount = this.extractAmount(parameters) ?? 0;
-          const customer = await this.prisma.customer.upsert({
-            where: { organizationId_name: { organizationId, name: customerName } } as any,
-            update: {},
-            create: { organizationId, name: customerName }
-          });
+          let customer = await this.prisma.customer.findFirst({ where: { organizationId, name: customerName } });
+          if (!customer) {
+            customer = await this.prisma.customer.create({ data: { organizationId, name: customerName } });
+          }
           await this.prisma.debtRecord.create({
             data: {
               organizationId,
@@ -117,11 +116,17 @@ export class ActionExecutorService {
             const qty = Number(parsed[1]);
             const name = parsed[2].trim();
             const unitPrice = Number(parsed[3].replace(/,/g, ""));
-            const product = await this.prisma.product.upsert({
-              where: { organizationId_name: { organizationId, name } } as any,
-              update: { sellingPrice: unitPrice },
-              create: { organizationId, name, sellingPrice: unitPrice, unit: "unit", lowStockLevel: 5 }
-            });
+            let product = await this.prisma.product.findFirst({ where: { organizationId, name } });
+            if (!product) {
+              product = await this.prisma.product.create({
+                data: { organizationId, name, sellingPrice: unitPrice, unit: "unit", lowStockLevel: 5 }
+              });
+            } else if (product.sellingPrice.toString() !== unitPrice.toString()) {
+              product = await this.prisma.product.update({
+                where: { id: product.id },
+                data: { sellingPrice: unitPrice }
+              });
+            }
             await this.inventory.recordTransaction(organizationId, {
               productId: product.id,
               branchId: branch.id,
