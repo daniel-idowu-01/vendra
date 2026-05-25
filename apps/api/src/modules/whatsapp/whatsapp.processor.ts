@@ -33,7 +33,8 @@ export class WhatsAppProcessor extends WorkerHost {
       const payload = event.payload as Record<string, any>;
       const change = payload?.payload?.entry?.[0]?.changes?.[0]?.value;
       const msg = change?.messages?.[0];
-      const text = msg?.text?.body;
+      let text = msg?.text?.body;
+      if (text) text = text.replace(/^`|`$/g, "");
       const from = msg?.from;
       const displayName = change?.contacts?.[0]?.profile?.name;
       const phoneNumberId = change?.metadata?.phone_number_id;
@@ -76,6 +77,7 @@ export class WhatsAppProcessor extends WorkerHost {
         await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { confirmationReply: text });
         const result = await this.executor.execute(organization.id, action);
         const reply = action.toolName === "unknown" ? action.response : result;
+        console.log(`[WhatsAppProcessor] Confirmed reply: "${reply?.slice(0, 80)}..."`);
         await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { reply });
         await this.whatsapp.sendText(organization.id, from, reply);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
@@ -100,6 +102,7 @@ export class WhatsAppProcessor extends WorkerHost {
         await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { detailsReply: text });
         const result = await this.executor.execute(organization.id, action);
         const reply = action.toolName === "unknown" ? action.response : result;
+        console.log(`[WhatsAppProcessor] Debt details reply: "${reply?.slice(0, 80)}..."`);
         await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { reply });
         await this.whatsapp.sendText(organization.id, from, reply);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
@@ -116,10 +119,22 @@ export class WhatsAppProcessor extends WorkerHost {
         await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { detailsReply: text });
         const result = await this.executor.execute(organization.id, action);
         const reply = action.toolName === "unknown" ? action.response : result;
+        console.log(`[WhatsAppProcessor] Sale details reply: "${reply?.slice(0, 80)}..."`);
         await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { reply });
         await this.whatsapp.sendText(organization.id, from, reply);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         console.log(`[WhatsAppProcessor] Done processing confirmed action`);
+        return;
+      }
+
+      if (!pending && this.isSaleDetails(text)) {
+        const action = this.toProposedAction({ items: text, sourceText: text }, "recordSale");
+        console.log(`[WhatsAppProcessor] Direct sale execution: "${text}"`);
+        const result = await this.executor.execute(organization.id, action);
+        console.log(`[WhatsAppProcessor] Direct sale reply: "${result?.slice(0, 80)}..."`);
+        await this.whatsapp.sendText(organization.id, from, result);
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        console.log(`[WhatsAppProcessor] Done processing direct sale`);
         return;
       }
 

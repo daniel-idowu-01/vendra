@@ -25,7 +25,7 @@ export class ActionExecutorService {
           const productId = parameters.productId as string | undefined;
           if (!productId) {
             const products = await this.inventory.listProducts(organizationId, { page: 1, pageSize: 100 });
-            return `📦 *Product List*\n${products.items.slice(0, 10).map((p: any) => `• ${p.name} (SKU: ${p.sku ?? "N/A"}) - ₦${Number(p.sellingPrice).toLocaleString()}`).join("\n")}\n\nReply with the product name to check stock.`;
+            return `📦 *Product List*\n${products.items.slice(0, 10).map((p: any) => `• ${p.name} (SKU: ${p.sku ?? "N/A"}) - ₦${Number(p.sellingPrice).toLocaleString("en-NG")}`).join("\n")}\n\nReply with the product name to check stock.`;
           }
           const stock = await this.inventory.getStockLevel(organizationId, productId);
           return `📊 *Stock Level*\nTotal: ${stock.total} units\n${stock.byBranch.map((b: any) => `Branch: ${b.quantity}`).join("\n")}`;
@@ -35,7 +35,7 @@ export class ActionExecutorService {
           const products = await this.inventory.listProducts(organizationId, { page: 1, pageSize: 25 });
           if (products.items.length === 0) return "No products found in your inventory.";
           const lines = products.items.map((p: any, i: number) =>
-            `${i + 1}. ${p.name} — ₦${Number(p.sellingPrice).toLocaleString()} (${p.unit})`
+            `${i + 1}. ${p.name} — ₦${Number(p.sellingPrice).toLocaleString("en-NG")} (${p.unit})`
           );
           return `📦 *Products (${products.total} total)*\n${lines.join("\n")}`;
         }
@@ -50,21 +50,21 @@ export class ActionExecutorService {
           const summary = await this.debts.summary(organizationId);
           if (summary.count === 0) return "🎉 No open debts. All customers are up to date!";
           const lines = summary.topDebtors.map((d: any, i: number) =>
-            `${i + 1}. ${d.customer} — ₦${Number(d.outstanding).toLocaleString()}`
+            `${i + 1}. ${d.customer} — ₦${Number(d.outstanding).toLocaleString("en-NG")}`
           );
-          return `💰 *Debt Summary*\nTotal outstanding: ₦${Number(summary.outstanding).toLocaleString()}\n${lines.join("\n")}`;
+          return `💰 *Debt Summary*\nTotal outstanding: ₦${Number(summary.outstanding).toLocaleString("en-NG")}\n${lines.join("\n")}`;
         }
 
         case "debtSummary": {
           const debts = await this.debts.list(organizationId);
           if (debts.length === 0) return "No debt records found.";
           const total = debts.reduce((s: number, d: any) => s + Number(d.outstanding), 0);
-          return `📋 *All Debts (${debts.length} records)*\nOutstanding total: ₦${total.toLocaleString()}\n\nTop: ${debts.slice(0, 5).map((d: any) => `${d.customer.name}: ₦${Number(d.outstanding).toLocaleString()}`).join("\n")}`;
+          return `📋 *All Debts (${debts.length} records)*\nOutstanding total: ₦${total.toLocaleString("en-NG")}\n\nTop: ${debts.slice(0, 5).map((d: any) => `${d.customer.name}: ₦${Number(d.outstanding).toLocaleString("en-NG")}`).join("\n")}`;
         }
 
         case "todaySales": {
           const dash = await this.analytics.dashboard(organizationId);
-          return `📈 *Today's Overview*\nSales: ₦${Number(dash.todaySales).toLocaleString()}\nDebts: ₦${Number(dash.openDebt).toLocaleString()}\nLow stock items: ${dash.lowStockCount}\n\n${dash.insights.join("\n")}`;
+          return `📈 *Today's Overview*\nSales: ₦${Number(dash.todaySales).toLocaleString("en-NG")}\nDebts: ₦${Number(dash.openDebt).toLocaleString("en-NG")}\nLow stock items: ${dash.lowStockCount}\n\n${dash.insights.join("\n")}`;
         }
 
         case "listCustomers": {
@@ -83,7 +83,7 @@ export class ActionExecutorService {
           const name = this.extractName(parameters) ?? "New Product";
           const price = this.extractAmount(parameters) ?? 0;
           const product = await this.inventory.createProduct(organizationId, { name, sellingPrice: price, unit: "unit" });
-          return `Product created: ${product.name} at ₦${Number(product.sellingPrice).toLocaleString()}.`;
+          return `Product created: ${product.name} at ₦${Number(product.sellingPrice).toLocaleString("en-NG")}.`;
         }
         case "recordDebt": {
           const customerName = this.extractName(parameters) ?? "Customer";
@@ -101,7 +101,7 @@ export class ActionExecutorService {
               status: "OPEN"
             }
           });
-          return `Debt recorded for ${customer.name}: ₦${amount.toLocaleString()}.`;
+          return `Debt recorded for ${customer.name}: ₦${amount.toLocaleString("en-NG")}.`;
         }
         case "recordSale": {
           const source = String(parameters.items ?? parameters.sourceText ?? "");
@@ -138,7 +138,16 @@ export class ActionExecutorService {
             total += qty * unitPrice;
           }
           if (recorded === 0) return "I could not parse sale lines. Use format: `1 White shirt for 10000`.";
-          return `Sale recorded: ${recorded} item line(s), total ₦${total.toLocaleString()}.`;
+          await this.prisma.payment.create({
+            data: {
+              organizationId,
+              provider: "MANUAL",
+              amount: total,
+              paidAt: new Date(),
+              metadata: { source: "whatsapp_ai", lines }
+            }
+          });
+          return `Sale recorded: ${recorded} item line(s), total ₦${total.toLocaleString("en-NG")}.`;
         }
 
         default:
