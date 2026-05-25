@@ -50,7 +50,7 @@ export class ActionExecutorService {
           const summary = await this.debts.summary(organizationId);
           if (summary.count === 0) return "🎉 No open debts. All customers are up to date!";
           const lines = summary.topDebtors.map((d: any, i: number) =>
-            `${i + 1}. ${d.customer} — ₦${Number(d.outstanding).toLocaleString()} (due ${new Date(d.dueDate).toLocaleDateString()})`
+            `${i + 1}. ${d.customer} — ₦${Number(d.outstanding).toLocaleString()}`
           );
           return `💰 *Debt Summary*\nTotal outstanding: ₦${Number(summary.outstanding).toLocaleString()}\n${lines.join("\n")}`;
         }
