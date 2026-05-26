@@ -25,18 +25,6 @@ export class WhatsAppProcessor extends WorkerHost {
       const event = await this.whatsappRepo.findWebhookEvent("whatsapp", job.data.providerEventId);
       if (!event) return;
 
-      const identity = msg?.from
-        ? await this.prisma.whatsAppIdentity.findUnique({ where: { phone: msg.from } })
-        : null;
-      const organization = identity
-        ? await this.prisma.organization.findUnique({ where: { id: identity.organizationId } })
-        : await this.whatsappRepo.findFirstOrganization();
-      if (!organization) {
-        console.warn("[WhatsAppProcessor] No organization found, skipping");
-        await this.whatsappRepo.markWebhookEventProcessed(event.id);
-        return;
-      }
-
       const payload = event.payload as Record<string, any>;
       const change = payload?.payload?.entry?.[0]?.changes?.[0]?.value;
       const msg = change?.messages?.[0];
@@ -45,6 +33,19 @@ export class WhatsAppProcessor extends WorkerHost {
       const from = msg?.from;
       const displayName = change?.contacts?.[0]?.profile?.name;
       const phoneNumberId = change?.metadata?.phone_number_id;
+
+      const identity = from
+        ? await this.prisma.whatsAppIdentity.findUnique({ where: { phone: from } })
+        : null;
+      const organization = identity
+        ? await this.prisma.organization.findUnique({ where: { id: identity.organizationId } })
+        : await this.whatsappRepo.findFirstOrganization();
+
+      if (!organization) {
+        console.warn("[WhatsAppProcessor] No organization found, skipping");
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        return;
+      }
 
       if (!phoneNumberId) {
         console.warn("[WhatsAppProcessor] No phone_number_id in webhook payload");
