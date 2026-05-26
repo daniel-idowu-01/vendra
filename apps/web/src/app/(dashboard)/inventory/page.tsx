@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Barcode, PackagePlus, Search, Loader2 } from "lucide-react";
+import { Barcode, Plus, Search, Loader2 } from "lucide-react";
 import { useProducts, useCreateProduct } from "@/lib/hooks/use-inventory";
 
 export default function InventoryPage() {
@@ -44,16 +44,19 @@ export default function InventoryPage() {
           <p className="text-sm text-muted-foreground">Inventory</p>
           <h1 className="text-2xl font-semibold">Stock room</h1>
         </div>
-        <Button className="h-10 w-10 px-0" aria-label="Add product" onClick={() => setShowAdd(true)}>
-          <PackagePlus className="h-5 w-5" />
+        <Button className="h-10 w-10 px-0 text-[#08070a]" aria-label="Add product" onClick={() => setShowAdd(true)}>
+          <Plus className="h-5 w-5 shrink-0" strokeWidth={2.5} />
         </Button>
       </header>
 
       <div className="flex gap-2">
         <div className="relative flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search
+            className="pointer-events-none absolute left-4 top-1/2 z-10 h-4 w-4 -translate-y-1/2 shrink-0 text-muted-foreground"
+            strokeWidth={2.25}
+          />
           <input
-            className="input-surface w-full pl-10"
+            className="input-surface input-with-icon w-full"
             placeholder="Search products..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
