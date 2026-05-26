@@ -17,12 +17,12 @@ const ThemeContext = createContext<ThemeContextValue>({
 const STORAGE_KEY = "vendra-theme";
 
 function getStored(): Theme {
-  if (typeof window === "undefined") return "light";
-  return (localStorage.getItem(STORAGE_KEY) as Theme) ?? "light";
+  if (typeof window === "undefined") return "dark";
+  return (localStorage.getItem(STORAGE_KEY) as Theme) ?? "dark";
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("light");
+  const [theme, setTheme] = useState<Theme>("dark");
 
   useEffect(() => {
     setTheme(getStored());

@@ -5,27 +5,8 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
-  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
-  --background: 40 20% 96%;
-  --surface: 40 15% 92%;
-  --surface-strong: 40 12% 85%;
-  --surface-soft: 40 18% 98%;
-  --foreground: 225 14% 12%;
-  --muted: 220 8% 46%;
-  --muted-foreground: 220 8% 36%;
-  --border: 40 12% 78%;
-  --accent: 35 95% 50%;
-  --accent-2: 178 86% 38%;
-  --accent-3: 304 80% 54%;
-  --card: 40 18% 94%;
-  --card-foreground: 225 14% 12%;
-  --shadow: 0 0% 0% / 0.08;
-  --overlay: 0 0 0;
-}
-
-[data-theme="dark"] {
   color-scheme: dark;
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --background: 225 14% 8%;
   --surface: 223 15% 13%;
   --surface-strong: 228 16% 18%;
@@ -41,6 +22,25 @@
   --card-foreground: 210 20% 96%;
   --shadow: 0 0% 0% / 0.2;
   --overlay: 255 255 255;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --background: 40 20% 96%;
+  --surface: 40 15% 92%;
+  --surface-strong: 40 12% 85%;
+  --surface-soft: 40 18% 98%;
+  --foreground: 225 14% 12%;
+  --muted: 220 8% 46%;
+  --muted-foreground: 220 8% 36%;
+  --border: 40 12% 78%;
+  --accent: 35 95% 50%;
+  --accent-2: 178 86% 38%;
+  --accent-3: 304 80% 54%;
+  --card: 40 18% 94%;
+  --card-foreground: 225 14% 12%;
+  --shadow: 0 0% 0% / 0.08;
+  --overlay: 0 0 0;
 }
 
 * {
