@@ -1,4 +1,4 @@
-import { BadRequestException, HttpException, Injectable, InternalServerErrorException, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, HttpException, Injectable, InternalServerErrorException, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import * as argon2 from "argon2";
@@ -25,7 +25,7 @@ export class AuthService {
 
       const result = await this.prisma.$transaction(async (tx) => {
         const user = await this.authRepo.createUser(
-          { email: dto.email.toLowerCase(), name: dto.name, passwordHash },
+          { email: dto.email.toLowerCase(), name: dto.name, passwordHash, phone: dto.phone },
           tx
         );
         const organization = await this.authRepo.createOrganization(
@@ -85,6 +85,20 @@ export class AuthService {
       console.error("[AuthService.refresh] Unexpected error:", error);
       throw new InternalServerErrorException("Token refresh failed. Please try again.");
     }
+  }
+
+  async linkWhatsApp(userId: string, organizationId: string, phone: string) {
+    const existing = await this.prisma.whatsAppIdentity.findUnique({ where: { phone } });
+    if (existing && existing.userId !== userId) {
+      throw new ConflictException("This phone number is already linked to another account");
+    }
+    if (existing && existing.userId === userId) return { linked: true, phone };
+
+    await this.prisma.whatsAppIdentity.create({
+      data: { phone, userId, organizationId }
+    });
+    await this.prisma.user.update({ where: { id: userId }, data: { phone } });
+    return { linked: true, phone };
   }
 
   private issueTokens(userId: string, email: string, organizationId?: string) {

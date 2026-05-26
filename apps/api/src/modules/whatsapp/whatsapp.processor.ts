@@ -1,5 +1,6 @@
 import { Processor, WorkerHost } from "@nestjs/bullmq";
 import { Job } from "bullmq";
+import { PrismaService } from "../../prisma/prisma.service";
 import { ActionExecutorService } from "../ai/action-executor.service";
 import { AiService, ProposedAction } from "../ai/ai.service";
 import { AiRepository } from "../ai/repositories/ai.repository";
@@ -13,7 +14,8 @@ export class WhatsAppProcessor extends WorkerHost {
     private readonly ai: AiService,
     private readonly aiRepo: AiRepository,
     private readonly executor: ActionExecutorService,
-    private readonly whatsapp: WhatsAppService
+    private readonly whatsapp: WhatsAppService,
+    private readonly prisma: PrismaService
   ) {
     super();
   }
@@ -23,7 +25,12 @@ export class WhatsAppProcessor extends WorkerHost {
       const event = await this.whatsappRepo.findWebhookEvent("whatsapp", job.data.providerEventId);
       if (!event) return;
 
-      const organization = await this.whatsappRepo.findFirstOrganization();
+      const identity = msg?.from
+        ? await this.prisma.whatsAppIdentity.findUnique({ where: { phone: msg.from } })
+        : null;
+      const organization = identity
+        ? await this.prisma.organization.findUnique({ where: { id: identity.organizationId } })
+        : await this.whatsappRepo.findFirstOrganization();
       if (!organization) {
         console.warn("[WhatsAppProcessor] No organization found, skipping");
         await this.whatsappRepo.markWebhookEventProcessed(event.id);

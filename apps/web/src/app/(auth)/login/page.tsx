@@ -18,6 +18,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [orgName, setOrgName] = useState("");
+  const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
 
   const isPending = login.isPending || signup.isPending;
@@ -32,7 +33,8 @@ export default function LoginPage() {
           email,
           password,
           name,
-          organizationName: orgName
+          organizationName: orgName,
+          phone: phone || undefined
         });
         setSession(result);
         router.push("/");
@@ -100,6 +102,18 @@ export default function LoginPage() {
                 value={orgName}
                 onChange={(e) => setOrgName(e.target.value)}
               />
+            </div>
+          )}
+          {isSignup && (
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-foreground">WhatsApp number (optional)</label>
+              <input
+                className="input-surface w-full"
+                placeholder="+2349028686300"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">Link your phone to use Vendra via WhatsApp.</p>
             </div>
           )}
           <div>

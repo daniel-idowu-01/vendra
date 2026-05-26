@@ -30,6 +30,7 @@ export function useSignup() {
       name: string;
       password: string;
       organizationName: string;
+      phone?: string;
     }) =>
       apiFetch<{ accessToken: string; refreshToken: string; organizationId?: string }>("/auth/signup", {
         method: "POST",
