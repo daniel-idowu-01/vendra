@@ -312,7 +312,7 @@ export class ActionExecutorService {
         provider: "MANUAL",
         amount: totalAmount,
         paidAt: new Date(),
-        metadata: { source: "whatsapp_ai", items }
+        metadata: { source: "whatsapp_ai", items: items as any }
       }
     });
 
