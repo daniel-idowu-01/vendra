@@ -1,4 +1,5 @@
-import { BadRequestException, HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { BadRequestException, ConflictException, HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { InventoryRepository } from "./repositories/inventory.repository";
 import { PaginationDto } from "../../common/pagination/pagination.dto";
@@ -27,9 +28,11 @@ export class InventoryService {
 
   async createProduct(organizationId: string, dto: CreateProductDto) {
     try {
+      const name = dto.name?.trim();
+      if (!name) throw new BadRequestException("Product name is required.");
       return await this.inventoryRepo.createProduct({
         organization: { connect: { id: organizationId } },
-        name: dto.name,
+        name,
         sku: dto.sku,
         barcode: dto.barcode,
         unit: dto.unit ?? "unit",
@@ -39,6 +42,14 @@ export class InventoryService {
       });
     } catch (error) {
       if (error instanceof HttpException) throw error;
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === "P2002") {
+          throw new ConflictException("A product with the same unique details already exists.");
+        }
+        if (error.code === "P2003") {
+          throw new BadRequestException("Invalid product relationship data.");
+        }
+      }
       console.error("[InventoryService.createProduct] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to create product.");
     }
