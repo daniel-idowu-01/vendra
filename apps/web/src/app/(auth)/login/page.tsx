@@ -48,7 +48,7 @@ export default function LoginPage() {
 
   return (
     <main className="relative mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
-      <div className="absolute inset-x-0 top-16 -z-10 h-72 rounded-full bg-[radial-gradient(circle_at_top_left,rgba(255,195,60,0.16),transparent_30%)] blur-3xl" />
+      <div className="absolute inset-x-0 top-16 -z-10 h-72 rounded-full bg-accent-glow blur-3xl" />
       <div className="relative space-y-8 glass-panel p-8">
         <div className="space-y-3">
           <p className="text-sm uppercase tracking-[0.32em] text-muted-foreground">Vendra</p>
