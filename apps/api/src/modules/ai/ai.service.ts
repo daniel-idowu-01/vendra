@@ -113,16 +113,15 @@ export class AiService {
       let usedProvider = "";
 
       try {
-        proposed = await this.classifyWithGemini(message, contextBlock);
-        usedProvider = "gemini";
-      } catch (geminiErr) {
-        console.warn("[AiService] Gemini failed:", (geminiErr as Error)?.message);
+        proposed = await this.classifyWithHuggingFace(message, contextBlock);
+        usedProvider = "huggingface";
+      } catch (hfErr) {
+        console.warn("[AiService] HuggingFace failed:", (hfErr as Error)?.message);
         try {
-          proposed = await this.classifyWithHuggingFace(message, contextBlock);
-          usedProvider = "huggingface";
-        } catch (hfErr) {
-          const hfCause = (hfErr as any)?.cause?.message ?? "";
-          console.warn("[AiService] HuggingFace failed, using manual fallback:", (hfErr as Error)?.message, hfCause);
+          proposed = await this.classifyWithGemini(message, contextBlock);
+          usedProvider = "gemini";
+        } catch (geminiErr) {
+          console.warn("[AiService] Gemini failed, using manual fallback:", (geminiErr as Error)?.message);
           proposed = this.fallbackClassify(message, history);
           usedProvider = "fallback";
         }
@@ -149,13 +148,27 @@ export class AiService {
     }
   }
 
-  private async classifyWithGemini(message: string, contextBlock: string): Promise<ProposedAction> {
-    const result = await this.model.generateContent([
-      { text: SYSTEM_PROMPT },
-      { text: `Conversation history:\n${contextBlock}` },
-      { text: `User message: "${message}"` }
-    ]);
-    return this.parseJsonResponse(result.response.text());
+  private async classifyWithGemini(message: string, contextBlock: string, retries = 3): Promise<ProposedAction> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const result = await this.model.generateContent([
+          { text: SYSTEM_PROMPT },
+          { text: `Conversation history:\n${contextBlock}` },
+          { text: `User message: "${message}"` }
+        ]);
+        return this.parseJsonResponse(result.response.text());
+      } catch (err) {
+        const isQuota = String(err).includes("429") || String(err).includes("quota") || String(err).includes("RESOURCE_EXHAUSTED");
+        if (isQuota && attempt < retries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+          console.warn(`[AiService] Gemini rate limited (attempt ${attempt}/${retries}), retrying in ${delay}ms...`);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("Gemini classification failed after all retries");
   }
 
   private async classifyWithHuggingFace(message: string, contextBlock: string): Promise<ProposedAction> {
@@ -412,7 +425,7 @@ export class AiService {
         organizationId,
         aiSessionId,
         toolName: proposed.toolName,
-        input: proposed.parameters,
+        input: { ...proposed.parameters, sourceText: message },
         confidence: proposed.confidence,
         status: proposed.requiresConfirmation ? "NEEDS_CONFIRMATION" : "PROPOSED",
         validation: {

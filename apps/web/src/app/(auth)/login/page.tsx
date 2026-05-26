@@ -18,6 +18,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [orgName, setOrgName] = useState("");
+  const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
 
   const isPending = login.isPending || signup.isPending;
@@ -32,7 +33,8 @@ export default function LoginPage() {
           email,
           password,
           name,
-          organizationName: orgName
+          organizationName: orgName,
+          phone: phone || undefined
         });
         setSession(result);
         router.push("/");
@@ -48,7 +50,7 @@ export default function LoginPage() {
 
   return (
     <main className="relative mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
-      <div className="absolute inset-x-0 top-16 -z-10 h-72 rounded-full bg-[radial-gradient(circle_at_top_left,rgba(255,195,60,0.16),transparent_30%)] blur-3xl" />
+      <div className="absolute inset-x-0 top-16 -z-10 h-72 rounded-full bg-accent-glow blur-3xl" />
       <div className="relative space-y-8 glass-panel p-8">
         <div className="space-y-3">
           <p className="text-sm uppercase tracking-[0.32em] text-muted-foreground">Vendra</p>
@@ -100,6 +102,18 @@ export default function LoginPage() {
                 value={orgName}
                 onChange={(e) => setOrgName(e.target.value)}
               />
+            </div>
+          )}
+          {isSignup && (
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-foreground">WhatsApp number (optional)</label>
+              <input
+                className="input-surface w-full"
+                placeholder="+2349028686300"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">Link your phone to use Vendra via WhatsApp.</p>
             </div>
           )}
           <div>

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { FilePlus2, Loader2, Send } from "lucide-react";
+import { Plus, Loader2, Send } from "lucide-react";
 import { useInvoices, useCreateInvoice } from "@/lib/hooks/use-invoices";
 
 export default function InvoicesPage() {
@@ -35,8 +35,8 @@ export default function InvoicesPage() {
           <p className="text-sm text-muted-foreground">Invoices</p>
           <h1 className="text-2xl font-semibold">Get paid</h1>
         </div>
-        <Button className="h-10 w-10 px-0" aria-label="Create invoice" onClick={() => setShowCreate(true)}>
-          <FilePlus2 className="h-5 w-5" />
+        <Button className="h-10 w-10 px-0 text-[#08070a]" aria-label="Create invoice" onClick={() => setShowCreate(true)}>
+          <Plus className="h-5 w-5 shrink-0" strokeWidth={2.5} />
         </Button>
       </header>
 

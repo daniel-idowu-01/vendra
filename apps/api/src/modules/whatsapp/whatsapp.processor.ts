@@ -1,5 +1,6 @@
 import { Processor, WorkerHost } from "@nestjs/bullmq";
 import { Job } from "bullmq";
+import { PrismaService } from "../../prisma/prisma.service";
 import { ActionExecutorService } from "../ai/action-executor.service";
 import { AiService, ProposedAction } from "../ai/ai.service";
 import { AiRepository } from "../ai/repositories/ai.repository";
@@ -13,7 +14,8 @@ export class WhatsAppProcessor extends WorkerHost {
     private readonly ai: AiService,
     private readonly aiRepo: AiRepository,
     private readonly executor: ActionExecutorService,
-    private readonly whatsapp: WhatsAppService
+    private readonly whatsapp: WhatsAppService,
+    private readonly prisma: PrismaService
   ) {
     super();
   }
@@ -23,20 +25,27 @@ export class WhatsAppProcessor extends WorkerHost {
       const event = await this.whatsappRepo.findWebhookEvent("whatsapp", job.data.providerEventId);
       if (!event) return;
 
-      const organization = await this.whatsappRepo.findFirstOrganization();
+      const payload = event.payload as Record<string, any>;
+      const change = payload?.payload?.entry?.[0]?.changes?.[0]?.value;
+      const msg = change?.messages?.[0];
+      let text = msg?.text?.body;
+      if (text) text = text.replace(/^`|`$/g, "");
+      const from = msg?.from;
+      const displayName = change?.contacts?.[0]?.profile?.name;
+      const phoneNumberId = change?.metadata?.phone_number_id;
+
+      const identity = from
+        ? await this.prisma.whatsAppIdentity.findUnique({ where: { phone: from } })
+        : null;
+      const organization = identity
+        ? await this.prisma.organization.findUnique({ where: { id: identity.organizationId } })
+        : await this.whatsappRepo.findFirstOrganization();
+
       if (!organization) {
         console.warn("[WhatsAppProcessor] No organization found, skipping");
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
-
-      const payload = event.payload as Record<string, any>;
-      const change = payload?.payload?.entry?.[0]?.changes?.[0]?.value;
-      const msg = change?.messages?.[0];
-      const text = msg?.text?.body;
-      const from = msg?.from;
-      const displayName = change?.contacts?.[0]?.profile?.name;
-      const phoneNumberId = change?.metadata?.phone_number_id;
 
       if (!phoneNumberId) {
         console.warn("[WhatsAppProcessor] No phone_number_id in webhook payload");
@@ -76,6 +85,7 @@ export class WhatsAppProcessor extends WorkerHost {
         await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { confirmationReply: text });
         const result = await this.executor.execute(organization.id, action);
         const reply = action.toolName === "unknown" ? action.response : result;
+        console.log(`[WhatsAppProcessor] Confirmed reply: "${reply?.slice(0, 80)}..."`);
         await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { reply });
         await this.whatsapp.sendText(organization.id, from, reply);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
@@ -100,6 +110,7 @@ export class WhatsAppProcessor extends WorkerHost {
         await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { detailsReply: text });
         const result = await this.executor.execute(organization.id, action);
         const reply = action.toolName === "unknown" ? action.response : result;
+        console.log(`[WhatsAppProcessor] Debt details reply: "${reply?.slice(0, 80)}..."`);
         await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { reply });
         await this.whatsapp.sendText(organization.id, from, reply);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
@@ -116,10 +127,22 @@ export class WhatsAppProcessor extends WorkerHost {
         await this.aiRepo.updateActionStatus(pending.id, "APPROVED", { detailsReply: text });
         const result = await this.executor.execute(organization.id, action);
         const reply = action.toolName === "unknown" ? action.response : result;
+        console.log(`[WhatsAppProcessor] Sale details reply: "${reply?.slice(0, 80)}..."`);
         await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { reply });
         await this.whatsapp.sendText(organization.id, from, reply);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         console.log(`[WhatsAppProcessor] Done processing confirmed action`);
+        return;
+      }
+
+      if (!pending && this.isSaleDetails(text)) {
+        const action = this.toProposedAction({ items: text, sourceText: text }, "recordSale");
+        console.log(`[WhatsAppProcessor] Direct sale execution: "${text}"`);
+        const result = await this.executor.execute(organization.id, action);
+        console.log(`[WhatsAppProcessor] Direct sale reply: "${result?.slice(0, 80)}..."`);
+        await this.whatsapp.sendText(organization.id, from, result);
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        console.log(`[WhatsAppProcessor] Done processing direct sale`);
         return;
       }
 

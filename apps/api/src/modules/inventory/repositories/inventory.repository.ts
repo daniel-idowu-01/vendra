@@ -12,12 +12,14 @@ export class InventoryRepository {
   }
 
   findProductsByOrg(organizationId: string, pagination: PaginationDto) {
-    const skip = (pagination.page - 1) * pagination.pageSize;
+    const page = Number(pagination.page) || 1;
+    const pageSize = Number(pagination.pageSize) || 25;
+    const skip = (page - 1) * pageSize;
     return this.prisma.product.findMany({
       where: { organizationId, isActive: true },
       orderBy: { name: "asc" },
       skip,
-      take: pagination.pageSize
+      take: pageSize
     });
   }
 
