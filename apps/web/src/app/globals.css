@@ -112,7 +112,7 @@ textarea::placeholder {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, hsl(var(--accent)) 0%, hsl(var(--accent-2)) 60%, hsl(var(--accent-3)) 100%);
+  background: hsl(var(--accent));
   color: #08070a;
   box-shadow: 0 18px 50px -30px rgba(255, 175, 0, 0.48);
 }
