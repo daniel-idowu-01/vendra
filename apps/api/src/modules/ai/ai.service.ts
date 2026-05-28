@@ -33,17 +33,11 @@ export type ProposedAction = {
   intent: IntentType;
   confidence: number;
   toolName: ToolName;
-  /**
-   * Strongly-typed parameters extracted from the user message.
-   * Each tool documents the keys it uses — see ActionExecutorService.
-   */
+  
   parameters: Record<string, unknown>;
-  /**
-   * True only for write operations.  The processor will send `response`
-   * to the user and wait for explicit confirmation before executing.
-   */
+  
   requiresConfirmation: boolean;
-  /** Human-readable reply to send to the user */
+  
   response: string;
 };
 
@@ -220,10 +214,7 @@ export class AiService {
     return parsed;
   }
 
-  /**
-   * Catches common LLM mistakes and repairs them rather than crashing or
-   * sending bad data to the executor.
-   */
+  
   private validateAndRepair(action: ProposedAction): ProposedAction {
     const VALID_TOOLS: ToolName[] = [
       "getStockLevel", "recordSale", "listProducts", "listTopDebtors",
@@ -279,11 +270,7 @@ export class AiService {
     return action;
   }
 
-  /**
-   * Pure keyword-based classifier used only when Gemini is unavailable.
-   * It is intentionally conservative — it will return `unknown` rather than
-   * guess wrong, because a wrong guess causes a database write.
-   */
+  
   private fallbackClassify(
     message: string,
     history: { role: string; content: string }[] = []
@@ -432,5 +419,6 @@ export class AiService {
     });
   }
 }
+
 
 
