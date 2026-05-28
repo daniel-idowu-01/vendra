@@ -1,5 +1,7 @@
 import { Processor, WorkerHost } from "@nestjs/bullmq";
+import { Logger } from "@nestjs/common";
 import { Job } from "bullmq";
+import { AiActionStatus } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { ActionExecutorService } from "../ai/action-executor.service";
 import { AiService, type ProposedAction, type ToolName } from "../ai/ai.service";
@@ -25,6 +27,8 @@ import { WhatsAppService } from "./whatsapp.service";
 
 @Processor("whatsapp-inbound")
 export class WhatsAppProcessor extends WorkerHost {
+  private readonly logger = new Logger(WhatsAppProcessor.name);
+
   constructor(
     private readonly whatsappRepo: WhatsAppRepository,
     private readonly ai: AiService,
@@ -42,7 +46,19 @@ export class WhatsAppProcessor extends WorkerHost {
       const event = await this.whatsappRepo.findWebhookEvent("whatsapp", job.data.providerEventId);
       if (!event) return;
 
-      const payload = event.payload as Record<string, any>;
+      const payload = event.payload as {
+        payload?: {
+          entry?: Array<{
+            changes?: Array<{
+              value?: {
+                messages?: Array<{ id?: string; from?: string; text?: { body?: string } }>;
+                contacts?: Array<{ profile?: { name?: string } }>;
+                metadata?: { phone_number_id?: string };
+              };
+            }>;
+          }>;
+        };
+      };
       const change = payload?.payload?.entry?.[0]?.changes?.[0]?.value;
       const msg = change?.messages?.[0];
       const from: string | undefined = msg?.from;
@@ -52,7 +68,7 @@ export class WhatsAppProcessor extends WorkerHost {
 
       // ── 2. Validate required fields ────────────────────────────────────────
       if (!rawText || !from || !phoneNumberId) {
-        console.log("[WhatsAppProcessor] Skipping — missing text, from, or phoneNumberId");
+        this.logger.debug("Skipping inbound webhook: missing text, from, or phoneNumberId");
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
@@ -64,7 +80,7 @@ export class WhatsAppProcessor extends WorkerHost {
         return;
       }
 
-      console.log(`[WhatsAppProcessor] Inbound from ${from}: "${text}"`);
+      this.logger.debug(`Inbound from ${from}: "${text}"`);
 
       // ── 3. Resolve organization ────────────────────────────────────────────
       const identity = await this.prisma.whatsAppIdentity.findUnique({ where: { phone: from } });
@@ -73,7 +89,7 @@ export class WhatsAppProcessor extends WorkerHost {
         : await this.whatsappRepo.findFirstOrganization();
 
       if (!organization) {
-        console.warn("[WhatsAppProcessor] No organization found — skipping");
+        this.logger.warn("No organization found for inbound WhatsApp message");
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
@@ -88,7 +104,7 @@ export class WhatsAppProcessor extends WorkerHost {
         organizationId: organization.id,
         conversationId: conversation.id,
         direction: "INBOUND",
-        providerMsgId: msg.id,
+        providerMsgId: msg?.id,
         text
       });
 
@@ -110,16 +126,16 @@ export class WhatsAppProcessor extends WorkerHost {
           return;
         }
         // Not handled = user sent a new intent; cancel pending and fall through
-        await this.aiRepo.updateActionStatus(pending.id, "REJECTED", {
+        await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.REJECTED, {
           reason: "User sent a new message — previous action cancelled"
         });
-        console.log(`[WhatsAppProcessor] Cancelled pending ${pending.toolName} — user sent new intent`);
+        this.logger.debug(`Cancelled pending ${pending.toolName}: user sent new intent`);
       }
 
       // ── 6. Classify intent ─────────────────────────────────────────────────
-      console.log(`[WhatsAppProcessor] Classifying message…`);
+      this.logger.debug("Classifying message");
       const { action } = await this.ai.proposeAction(organization.id, text, conversation.id);
-      console.log(
+      this.logger.debug(
         `[WhatsAppProcessor] intent=${action.intent} tool=${action.toolName} ` +
         `conf=${action.confidence} confirm=${action.requiresConfirmation}`
       );
@@ -129,7 +145,7 @@ export class WhatsAppProcessor extends WorkerHost {
         // Send the AI's confirmation prompt and stop — do NOT execute yet
         await this.reply(organization.id, from, action.response);
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
-        console.log(`[WhatsAppProcessor] Awaiting user confirmation for ${action.toolName}`);
+        this.logger.debug(`Awaiting user confirmation for ${action.toolName}`);
         return;
       }
 
@@ -143,10 +159,9 @@ export class WhatsAppProcessor extends WorkerHost {
       const result = await this.executor.execute(organization.id, action);
       await this.reply(organization.id, from, result);
       await this.whatsappRepo.markWebhookEventProcessed(event.id);
-      console.log(`[WhatsAppProcessor] Done — ${action.toolName}`);
+      this.logger.debug(`Done - ${action.toolName}`);
     } catch (error) {
-      console.error("[WhatsAppProcessor.process] Unexpected error:", error);
-      // Do NOT re-throw — BullMQ will retry; log is enough for investigation
+      this.logger.error("Unexpected processor error", error as Error);
     }
   }
 
@@ -171,21 +186,21 @@ export class WhatsAppProcessor extends WorkerHost {
 
     // ── Explicit YES ──────────────────────────────────────────────────────
     if (isYes) {
-      console.log(`[WhatsAppProcessor] User confirmed ${pending.toolName}`);
-      await this.aiRepo.updateActionStatus(pending.id, "APPROVED");
+      this.logger.debug(`User confirmed ${pending.toolName}`);
+      await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.APPROVED);
 
       const action = this.reconstructAction(pending);
       const result = await this.executor.execute(organizationId, action);
 
-      await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { result });
+      await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.EXECUTED, { result });
       await this.reply(organizationId, from, result);
       return true;
     }
 
     // ── Explicit NO ───────────────────────────────────────────────────────
     if (isNo) {
-      console.log(`[WhatsAppProcessor] User declined ${pending.toolName}`);
-      await this.aiRepo.updateActionStatus(pending.id, "REJECTED", { reason: "User declined" });
+      this.logger.debug(`User declined ${pending.toolName}`);
+      await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.REJECTED, { reason: "User declined" });
       await this.reply(organizationId, from, "Cancelled. Let me know if there's anything else I can help with.");
       return true;
     }
@@ -199,11 +214,11 @@ export class WhatsAppProcessor extends WorkerHost {
         text
       );
       if (enriched) {
-        console.log(`[WhatsAppProcessor] Enriched debt parameters from user reply`);
-        await this.aiRepo.updateActionStatus(pending.id, "APPROVED");
+        this.logger.debug("Enriched debt parameters from user reply");
+        await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.APPROVED);
         const action = this.reconstructAction(pending, enriched);
         const result = await this.executor.execute(organizationId, action);
-        await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { result });
+        await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.EXECUTED, { result });
         await this.reply(organizationId, from, result);
         return true;
       }
@@ -217,11 +232,11 @@ export class WhatsAppProcessor extends WorkerHost {
         text
       );
       if (enriched) {
-        console.log(`[WhatsAppProcessor] Enriched sale parameters from user reply`);
-        await this.aiRepo.updateActionStatus(pending.id, "APPROVED");
+        this.logger.debug("Enriched sale parameters from user reply");
+        await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.APPROVED);
         const action = this.reconstructAction(pending, enriched);
         const result = await this.executor.execute(organizationId, action);
-        await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { result });
+        await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.EXECUTED, { result });
         await this.reply(organizationId, from, result);
         return true;
       }
@@ -234,11 +249,11 @@ export class WhatsAppProcessor extends WorkerHost {
         text
       );
       if (enriched) {
-        console.log(`[WhatsAppProcessor] Enriched product parameters from user reply`);
-        await this.aiRepo.updateActionStatus(pending.id, "APPROVED");
+        this.logger.debug("Enriched product parameters from user reply");
+        await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.APPROVED);
         const action = this.reconstructAction(pending, enriched);
         const result = await this.executor.execute(organizationId, action);
-        await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { result });
+        await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.EXECUTED, { result });
         await this.reply(organizationId, from, result);
         return true;
       }
@@ -251,11 +266,11 @@ export class WhatsAppProcessor extends WorkerHost {
         text
       );
       if (enriched) {
-        console.log(`[WhatsAppProcessor] Enriched customer parameters from user reply`);
-        await this.aiRepo.updateActionStatus(pending.id, "APPROVED");
+        this.logger.debug("Enriched customer parameters from user reply");
+        await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.APPROVED);
         const action = this.reconstructAction(pending, enriched);
         const result = await this.executor.execute(organizationId, action);
-        await this.aiRepo.updateActionStatus(pending.id, "EXECUTED", { result });
+        await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.EXECUTED, { result });
         await this.reply(organizationId, from, result);
         return true;
       }
@@ -376,7 +391,7 @@ export class WhatsAppProcessor extends WorkerHost {
     try {
       await this.whatsapp.sendText(organizationId, to, text);
     } catch (err) {
-      console.error("[WhatsAppProcessor] Failed to send reply:", err);
+      this.logger.error("Failed to send WhatsApp reply", err as Error);
     }
   }
 }

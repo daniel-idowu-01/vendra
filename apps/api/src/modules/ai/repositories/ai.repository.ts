@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { Prisma } from "@prisma/client";
+import { AiActionStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../../../prisma/prisma.service";
 
 @Injectable()
@@ -21,7 +21,7 @@ export class AiRepository {
     toolName: string;
     input: Record<string, unknown>;
     confidence: number;
-    status: string;
+    status: AiActionStatus;
     validation?: Record<string, unknown>;
   }) {
     return this.prisma.aiAction.create({
@@ -31,7 +31,7 @@ export class AiRepository {
         toolName: data.toolName,
         input: data.input as unknown as Prisma.InputJsonValue,
         confidence: data.confidence,
-        status: data.status as any,
+        status: data.status,
         validation: data.validation as unknown as Prisma.InputJsonValue
       }
     });
@@ -41,22 +41,18 @@ export class AiRepository {
     return this.prisma.aiAction.findFirst({
       where: {
         organizationId,
-        status: "NEEDS_CONFIRMATION" as any,
+        status: AiActionStatus.NEEDS_CONFIRMATION,
         session: { conversationId }
       },
       orderBy: { createdAt: "desc" }
     });
   }
 
-  updateActionStatus(
-    id: string,
-    status: "APPROVED" | "EXECUTED" | "REJECTED" | "FAILED",
-    result?: Record<string, unknown>
-  ) {
+  updateActionStatus(id: string, status: AiActionStatus, result?: Record<string, unknown>) {
     return this.prisma.aiAction.update({
       where: { id },
       data: {
-        status: status as any,
+        status,
         executedAt: status === "EXECUTED" || status === "FAILED" ? new Date() : undefined,
         result: result as unknown as Prisma.InputJsonValue
       }
