@@ -6,28 +6,11 @@ import { DebtsService } from "../debts/debts.service";
 import { InventoryService } from "../inventory/inventory.service";
 import { type ProposedAction } from "./ai.service";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Types for extracted parameters
-// ─────────────────────────────────────────────────────────────────────────────
-
 interface SaleItem {
   name: string;
   quantity: number;
   unitPrice: number;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ActionExecutorService
-//
-// Responsibilities:
-//  1. Accept a validated ProposedAction whose requiresConfirmation is FALSE.
-//  2. Extract well-typed parameters from action.parameters.
-//  3. Call the appropriate domain service / Prisma operation.
-//  4. Return a human-readable result string (WhatsApp-formatted).
-//
-// IMPORTANT: This service NEVER decides whether to execute — the processor
-// does that by checking requiresConfirmation and awaiting user consent first.
-// ─────────────────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class ActionExecutorService {
@@ -44,7 +27,6 @@ export class ActionExecutorService {
 
     try {
       switch (toolName) {
-        // ── READ TOOLS ────────────────────────────────────────────────────────
 
         case "listProducts": {
           const products = await this.inventory.listProducts(organizationId, { page: 1, pageSize: 25 });
@@ -134,7 +116,6 @@ export class ActionExecutorService {
           return `👥 *Customers (${list.length} total)*\n${lines.join("\n")}`;
         }
 
-        // ── WRITE TOOLS ───────────────────────────────────────────────────────
         // These are only reached AFTER the user has confirmed.
 
         case "createCustomer": {
@@ -207,8 +188,6 @@ export class ActionExecutorService {
           );
         }
 
-        // ── UNKNOWN / DEFAULT ────────────────────────────────────────────────
-
         case "unknown":
         default:
           return action.response || "I'm not sure how to help with that. Try asking about products, sales, customers, or debts.";
@@ -219,10 +198,7 @@ export class ActionExecutorService {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Sale recording — supports both structured (items array from AI) and
   // fallback free-text parsing.
-  // ─────────────────────────────────────────────────────────────────────────
 
   private async handleRecordSale(
     organizationId: string,
@@ -325,13 +301,7 @@ export class ActionExecutorService {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Parameter helpers
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Try each key in order; throw a user-friendly error if none found.
-   */
+  
   private requireString(
     params: Record<string, unknown>,
     keys: string[],
@@ -377,14 +347,7 @@ export class ActionExecutorService {
     return undefined;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Sale text parsing helpers
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Convert the structured items array the AI produced.
-   * Handles both camelCase and snake_case keys.
-   */
+  
   private parseStructuredItems(raw: unknown[]): SaleItem[] {
     const items: SaleItem[] = [];
     for (const entry of raw) {
@@ -405,13 +368,7 @@ export class ActionExecutorService {
     return items;
   }
 
-  /**
-   * Fallback: parse free-text sale lines.
-   * Supports formats:
-   *   "2 White shirts for 5000"
-   *   "2 White shirts @ 5000"
-   *   "Sold 2 bags at 3000 each"
-   */
+  
   private parseSaleText(source: string): SaleItem[] {
     const items: SaleItem[] = [];
     const lines = source

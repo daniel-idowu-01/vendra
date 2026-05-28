@@ -9,21 +9,9 @@ import { AiRepository } from "../ai/repositories/ai.repository";
 import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 import { WhatsAppService } from "./whatsapp.service";
 
-// ─────────────────────────────────────────────────────────────────────────────
 // WhatsAppProcessor
 //
-// Message flow:
 //
-//   1. Receive raw inbound message.
-//   2. Resolve organization + conversation.
-//   3. Check for a PENDING (NEEDS_CONFIRMATION) action in this conversation.
-//      a. User said YES  → execute the pending action.
-//      b. User said NO   → reject and acknowledge.
-//      c. User sent new intent → cancel pending, classify fresh.
-//   4. Classify the message with AiService.proposeAction.
-//   5. If requiresConfirmation=true → send confirmation prompt, do NOT execute.
-//   6. If requiresConfirmation=false → execute immediately via ActionExecutorService.
-// ─────────────────────────────────────────────────────────────────────────────
 
 @Processor("whatsapp-inbound")
 export class WhatsAppProcessor extends WorkerHost {
@@ -42,7 +30,6 @@ export class WhatsAppProcessor extends WorkerHost {
 
   async process(job: Job<{ providerEventId: string }>): Promise<void> {
     try {
-      // ── 1. Load raw webhook event ──────────────────────────────────────────
       const event = await this.whatsappRepo.findWebhookEvent("whatsapp", job.data.providerEventId);
       if (!event) return;
 
@@ -66,7 +53,6 @@ export class WhatsAppProcessor extends WorkerHost {
       const displayName: string | undefined = change?.contacts?.[0]?.profile?.name;
       const phoneNumberId: string | undefined = change?.metadata?.phone_number_id;
 
-      // ── 2. Validate required fields ────────────────────────────────────────
       if (!rawText || !from || !phoneNumberId) {
         this.logger.debug("Skipping inbound webhook: missing text, from, or phoneNumberId");
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
@@ -82,7 +68,6 @@ export class WhatsAppProcessor extends WorkerHost {
 
       this.logger.debug(`Inbound from ${from}: "${text}"`);
 
-      // ── 3. Resolve organization ────────────────────────────────────────────
       const identity = await this.prisma.whatsAppIdentity.findUnique({ where: { phone: from } });
       const organization = identity
         ? await this.prisma.organization.findUnique({ where: { id: identity.organizationId } })
@@ -94,7 +79,6 @@ export class WhatsAppProcessor extends WorkerHost {
         return;
       }
 
-      // ── 4. Upsert account / contact / conversation ─────────────────────────
       const account = await this.whatsappRepo.upsertWhatsAppAccount(organization.id, phoneNumberId);
       const contact = await this.whatsappRepo.upsertContact(organization.id, account.id, from, displayName);
       const conversation = await this.whatsappRepo.findOrCreateConversation(organization.id, contact.id);
@@ -108,7 +92,6 @@ export class WhatsAppProcessor extends WorkerHost {
         text
       });
 
-      // ── 5. Handle pending confirmation ─────────────────────────────────────
       const pending = await this.aiRepo.findLatestPendingActionForConversation(
         organization.id,
         conversation.id
@@ -132,7 +115,6 @@ export class WhatsAppProcessor extends WorkerHost {
         this.logger.debug(`Cancelled pending ${pending.toolName}: user sent new intent`);
       }
 
-      // ── 6. Classify intent ─────────────────────────────────────────────────
       this.logger.debug("Classifying message");
       const { action } = await this.ai.proposeAction(organization.id, text, conversation.id);
       this.logger.debug(
@@ -140,7 +122,6 @@ export class WhatsAppProcessor extends WorkerHost {
         `conf=${action.confidence} confirm=${action.requiresConfirmation}`
       );
 
-      // ── 7. Dispatch based on confirmation requirement ──────────────────────
       if (action.requiresConfirmation) {
         // Send the AI's confirmation prompt and stop — do NOT execute yet
         await this.reply(organization.id, from, action.response);
@@ -165,12 +146,9 @@ export class WhatsAppProcessor extends WorkerHost {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Pending action handler
   //
   // Returns true if the message was consumed by a pending action, false if the
   // caller should treat it as a fresh intent.
-  // ─────────────────────────────────────────────────────────────────────────
 
   private async handlePendingAction(
     organizationId: string,
@@ -184,7 +162,6 @@ export class WhatsAppProcessor extends WorkerHost {
     const isYes = /^(yes|yeah|ok|okay|sure|confirm|proceed|do it|go ahead|correct|right)$/i.test(trimmed);
     const isNo = /^(no|nope|never|stop|cancel|don't|dont|nah)$/i.test(trimmed);
 
-    // ── Explicit YES ──────────────────────────────────────────────────────
     if (isYes) {
       this.logger.debug(`User confirmed ${pending.toolName}`);
       await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.APPROVED);
@@ -197,7 +174,6 @@ export class WhatsAppProcessor extends WorkerHost {
       return true;
     }
 
-    // ── Explicit NO ───────────────────────────────────────────────────────
     if (isNo) {
       this.logger.debug(`User declined ${pending.toolName}`);
       await this.aiRepo.updateActionStatus(pending.id, AiActionStatus.REJECTED, { reason: "User declined" });
@@ -205,7 +181,6 @@ export class WhatsAppProcessor extends WorkerHost {
       return true;
     }
 
-    // ── Supplemental details for recordDebt ───────────────────────────────
     // e.g. pending was "Emeka owes me money" and AI asked "how much?" —
     // now user replies "30000"
     if (pending.toolName === "recordDebt") {
@@ -224,7 +199,6 @@ export class WhatsAppProcessor extends WorkerHost {
       }
     }
 
-    // ── Supplemental details for recordSale ──────────────────────────────
     // e.g. pending was "I want to record a sale" and user now provides items
     if (pending.toolName === "recordSale") {
       const enriched = this.tryEnrichSaleParams(
@@ -242,7 +216,6 @@ export class WhatsAppProcessor extends WorkerHost {
       }
     }
 
-    // ── Supplemental details for createProduct ───────────────────────────
     if (pending.toolName === "createProduct") {
       const enriched = this.tryEnrichProductParams(
         pending.input as Record<string, unknown>,
@@ -259,7 +232,6 @@ export class WhatsAppProcessor extends WorkerHost {
       }
     }
 
-    // ── Supplemental details for createCustomer ──────────────────────────
     if (pending.toolName === "createCustomer") {
       const enriched = this.tryEnrichCustomerParams(
         pending.input as Record<string, unknown>,
@@ -280,14 +252,7 @@ export class WhatsAppProcessor extends WorkerHost {
     return false;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Parameter enrichment helpers
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * If the pending debt record is missing an amount and the user's reply
-   * contains only a number, treat it as the missing amount.
-   */
+  
   private tryEnrichDebtParams(
     existing: Record<string, unknown>,
     text: string
@@ -308,10 +273,7 @@ export class WhatsAppProcessor extends WorkerHost {
     return null;
   }
 
-  /**
-   * If pending sale has no items and the user's reply looks like sale lines,
-   * use the text as sale source.
-   */
+  
   private tryEnrichSaleParams(
     existing: Record<string, unknown>,
     text: string
@@ -322,9 +284,7 @@ export class WhatsAppProcessor extends WorkerHost {
     return { ...existing, sourceText: text, items: text };
   }
 
-  /**
-   * If pending createProduct has no name/price and user provides them.
-   */
+  
   private tryEnrichProductParams(
     existing: Record<string, unknown>,
     text: string
@@ -347,9 +307,7 @@ export class WhatsAppProcessor extends WorkerHost {
     return null;
   }
 
-  /**
-   * If pending createCustomer has no name, treat the reply as the name.
-   */
+  
   private tryEnrichCustomerParams(
     existing: Record<string, unknown>,
     text: string
@@ -364,25 +322,18 @@ export class WhatsAppProcessor extends WorkerHost {
     return null;
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Helpers
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Rebuild a ProposedAction from a persisted AiAction record.
-   * Merges optional parameter overrides (for enrichment cases).
-   */
+  
   private reconstructAction(
     record: { toolName: string; input: unknown },
     overrideParams?: Record<string, unknown>
   ): ProposedAction {
     const input = (record.input ?? {}) as Record<string, unknown>;
     return {
-      intent: "UNKNOWN",               // Intent is only used for analytics; doesn't matter here
+      intent: "UNKNOWN", // Intent is only used for analytics; doesn't matter here
       confidence: 1,
       toolName: record.toolName as ToolName,
       parameters: overrideParams ? { ...input, ...overrideParams } : input,
-      requiresConfirmation: false,     // Already confirmed
+      requiresConfirmation: false, // Already confirmed
       response: ""
     };
   }
