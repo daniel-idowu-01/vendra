@@ -13,6 +13,7 @@ import { InventoryModule } from "./modules/inventory/inventory.module";
 import { InvoicingModule } from "./modules/invoicing/invoicing.module";
 import { OrganizationsModule } from "./modules/organizations/organizations.module";
 import { PaymentsModule } from "./modules/payments/payments.module";
+import { HealthModule } from "./modules/health/health.module";
 import { WhatsAppModule } from "./modules/whatsapp/whatsapp.module";
 import { PrismaModule } from "./prisma/prisma.module";
 
@@ -37,6 +38,7 @@ import { PrismaModule } from "./prisma/prisma.module";
     InvoicingModule,
     DebtsModule,
     PaymentsModule,
+    HealthModule,
     WhatsAppModule,
     AiModule,
     AnalyticsModule,

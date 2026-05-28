@@ -42,6 +42,7 @@ async function bootstrap() {
   );
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new RequestIdInterceptor());
+  app.enableShutdownHooks();
 
   await listenWithRetry(app, config.get<number>("PORT", 4000));
 }
