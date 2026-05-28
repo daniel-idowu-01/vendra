@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, HttpException, Injectable, InternalServerErrorException, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, HttpException, Injectable, InternalServerErrorException, UnauthorizedException, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import * as argon2 from "argon2";
@@ -50,7 +50,7 @@ export class AuthService {
       return this.issueTokens(result.user.id, result.user.email, result.organization.id);
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[AuthService.signup] Unexpected error:", error);
+      Logger.error("[AuthService.signup] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to create account. Please try again.");
     }
   }
@@ -65,7 +65,7 @@ export class AuthService {
       return this.issueTokens(user.id, user.email, membership?.organizationId);
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[AuthService.login] Unexpected error:", error);
+      Logger.error("[AuthService.login] Unexpected error:", error);
       throw new InternalServerErrorException("Login failed. Please try again.");
     }
   }
@@ -82,7 +82,7 @@ export class AuthService {
       if (error instanceof Error && error.name === "JsonWebTokenError") {
         throw new UnauthorizedException("Invalid or expired refresh token");
       }
-      console.error("[AuthService.refresh] Unexpected error:", error);
+      Logger.error("[AuthService.refresh] Unexpected error:", error);
       throw new InternalServerErrorException("Token refresh failed. Please try again.");
     }
   }
@@ -116,3 +116,4 @@ export class AuthService {
     };
   }
 }
+

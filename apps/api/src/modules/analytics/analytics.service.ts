@@ -1,4 +1,4 @@
-import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { HttpException, Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { AnalyticsRepository } from "./repositories/analytics.repository";
 
 @Injectable()
@@ -39,8 +39,9 @@ export class AnalyticsService {
       };
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[AnalyticsService.dashboard] Unexpected error:", error);
+      Logger.error("[AnalyticsService.dashboard] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to generate dashboard analytics.");
     }
   }
 }
+

@@ -1,4 +1,4 @@
-import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { HttpException, Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { InvoicingRepository } from "./repositories/invoicing.repository";
 
 type CreateInvoiceInput = {
@@ -15,7 +15,7 @@ export class InvoicingService {
       return await this.invoicingRepo.findManyByOrg(organizationId);
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[InvoicingService.list] Unexpected error:", error);
+      Logger.error("[InvoicingService.list] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve invoices.");
     }
   }
@@ -42,8 +42,9 @@ export class InvoicingService {
       });
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[InvoicingService.createDraft] Unexpected error:", error);
+      Logger.error("[InvoicingService.createDraft] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to create invoice draft.");
     }
   }
 }
+

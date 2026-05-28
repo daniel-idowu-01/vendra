@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { BadRequestException, ConflictException, HttpException, Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { InventoryRepository } from "./repositories/inventory.repository";
@@ -21,7 +21,7 @@ export class InventoryService {
       return { items, total, page: pagination.page, pageSize: pagination.pageSize };
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[InventoryService.listProducts] Unexpected error:", error);
+      Logger.error("[InventoryService.listProducts] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve products.");
     }
   }
@@ -50,7 +50,7 @@ export class InventoryService {
           throw new BadRequestException("Invalid product relationship data.");
         }
       }
-      console.error("[InventoryService.createProduct] Unexpected error:", error);
+      Logger.error("[InventoryService.createProduct] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to create product.");
     }
   }
@@ -65,7 +65,7 @@ export class InventoryService {
       };
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[InventoryService.getStockLevel] Unexpected error:", error);
+      Logger.error("[InventoryService.getStockLevel] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve stock level.");
     }
   }
@@ -118,7 +118,7 @@ export class InventoryService {
       });
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[InventoryService.recordTransaction] Unexpected error:", error);
+      Logger.error("[InventoryService.recordTransaction] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to record inventory transaction.");
     }
   }
@@ -136,8 +136,9 @@ export class InventoryService {
         .filter((product) => product.quantity <= product.lowStockLevel);
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[InventoryService.lowStock] Unexpected error:", error);
+      Logger.error("[InventoryService.lowStock] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve low stock alerts.");
     }
   }
 }
+

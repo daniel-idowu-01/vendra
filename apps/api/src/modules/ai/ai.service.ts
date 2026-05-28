@@ -1,11 +1,7 @@
-import { HttpException, Injectable } from "@nestjs/common";
+import { HttpException, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { AiRepository } from "./repositories/ai.repository";
-
-// ─────────────────────────────────────────────
-// Public types
-// ─────────────────────────────────────────────
 
 export type IntentType =
   | "INVENTORY_QUERY"
@@ -50,10 +46,6 @@ export type ProposedAction = {
   /** Human-readable reply to send to the user */
   response: string;
 };
-
-// ─────────────────────────────────────────────
-// Prompt
-// ─────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are Vendra AI, a business assistant embedded inside WhatsApp.
 You help Nigerian business owners manage inventory, sales, customers, and debts in real-time.
@@ -123,10 +115,6 @@ OUTPUT FORMAT  — valid JSON only, no markdown, no code fences
   "response": "<message to send to user>"
 }`;
 
-// ─────────────────────────────────────────────
-// Service
-// ─────────────────────────────────────────────
-
 @Injectable()
 export class AiService {
   private readonly genAI: GoogleGenerativeAI;
@@ -147,8 +135,6 @@ export class AiService {
     });
   }
 
-  // ── Public API ──────────────────────────────
-
   async proposeAction(
     organizationId: string,
     message: string,
@@ -165,7 +151,7 @@ export class AiService {
       proposed = await this.classifyWithGemini(message, history);
       provider = "gemini";
     } catch (geminiErr) {
-      console.warn("[AiService] Gemini classification failed:", (geminiErr as Error)?.message);
+      Logger.warn("[AiService] Gemini classification failed:", (geminiErr as Error)?.message);
       proposed = this.fallbackClassify(message, history);
       provider = "fallback";
     }
@@ -179,16 +165,14 @@ export class AiService {
 
     // Persist intent + action for audit trail
     await this.persistAction(organizationId, message, sessionId, proposed).catch((err) =>
-      console.error("[AiService] persistAction error (non-fatal):", err)
+      Logger.error("[AiService] persistAction error (non-fatal):", err)
     );
 
-    console.log(
+    Logger.log(
       `[AiService] [${provider}] intent=${proposed.intent} tool=${proposed.toolName} conf=${proposed.confidence}`
     );
     return { action: proposed, sessionId };
   }
-
-  // ── Private: Gemini ─────────────────────────
 
   private async classifyWithGemini(
     message: string,
@@ -217,7 +201,7 @@ export class AiService {
 
         if (isQuota && attempt < retries) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
-          console.warn(`[AiService] Gemini rate-limited (attempt ${attempt}/${retries}), retrying in ${delay}ms`);
+          Logger.warn(`[AiService] Gemini rate-limited (attempt ${attempt}/${retries}), retrying in ${delay}ms`);
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
@@ -226,8 +210,6 @@ export class AiService {
     }
     throw new Error("Gemini classification failed after all retries");
   }
-
-  // ── Private: Parse + Validate ───────────────
 
   private parseJsonResponse(raw: string): ProposedAction {
     const clean = raw
@@ -252,10 +234,8 @@ export class AiService {
     const WRITE_TOOLS: ToolName[] = [
       "recordSale", "createProduct", "createCustomer", "recordDebt", "createInvoiceDraft"
     ];
-
-    // Unknown tool name → fallback
     if (!VALID_TOOLS.includes(action.toolName)) {
-      console.warn(`[AiService] LLM returned unknown toolName "${action.toolName}", resetting to unknown`);
+      Logger.warn(`[AiService] LLM returned unknown toolName "${action.toolName}", resetting to unknown`);
       action.toolName = "unknown";
       action.intent = "UNKNOWN";
       action.requiresConfirmation = false;
@@ -263,7 +243,7 @@ export class AiService {
 
     // Write tool must always require confirmation
     if (WRITE_TOOLS.includes(action.toolName) && !action.requiresConfirmation) {
-      console.warn(`[AiService] Write tool "${action.toolName}" had requiresConfirmation=false — correcting`);
+      Logger.warn(`[AiService] Write tool "${action.toolName}" had requiresConfirmation=false — correcting`);
       action.requiresConfirmation = true;
     }
 
@@ -299,8 +279,6 @@ export class AiService {
     return action;
   }
 
-  // ── Private: Keyword fallback ───────────────
-
   /**
    * Pure keyword-based classifier used only when Gemini is unavailable.
    * It is intentionally conservative — it will return `unknown` rather than
@@ -311,8 +289,6 @@ export class AiService {
     history: { role: string; content: string }[] = []
   ): ProposedAction {
     const m = message.toLowerCase().trim();
-
-    // ── Context-aware confirmation handling ────
     const lastAssistant = [...history].reverse().find((h) => h.role === "assistant");
     const lastAiText = lastAssistant?.content.toLowerCase() ?? "";
     const prevUserMsg = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
@@ -347,8 +323,6 @@ export class AiService {
       }
     }
 
-    // ── Read-only queries ──────────────────────
-
     if (/\b(low.?stock|running out|almost finish|nearly finish)\b/.test(m)) {
       return this.makeReadAction("INVENTORY_QUERY", "lowStockAlert", {}, "Checking for low stock items…");
     }
@@ -370,8 +344,6 @@ export class AiService {
     if (/\b(customer|client|buyer|who buy)\b/.test(m) && !/\badd\b|\bcreate\b|\bnew\b/.test(m)) {
       return this.makeReadAction("CUSTOMER_LOOKUP", "listCustomers", {}, "Fetching your customer list…");
     }
-
-    // ── Write actions (require confirmation) ───
 
     if (/\b(sold|sale|record sale|i sell)\b/.test(m)) {
       return {
@@ -408,8 +380,6 @@ export class AiService {
         response: "I'll draft that invoice. Please confirm the customer and items."
       };
     }
-
-    // ── Unknown ────────────────────────────────
     return {
       intent: "UNKNOWN", confidence: 0.3, toolName: "unknown",
       parameters: { sourceText: message }, requiresConfirmation: false,
@@ -435,8 +405,6 @@ export class AiService {
   ): ProposedAction {
     return { intent, confidence: 0.75, toolName, parameters, requiresConfirmation: false, response };
   }
-
-  // ── Private: Persist ────────────────────────
 
   private async persistAction(
     organizationId: string,
@@ -464,3 +432,5 @@ export class AiService {
     });
   }
 }
+
+

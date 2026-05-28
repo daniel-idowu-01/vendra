@@ -1,4 +1,4 @@
-import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { HttpException, Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { DebtsRepository } from "./repositories/debts.repository";
 
 @Injectable()
@@ -10,7 +10,7 @@ export class DebtsService {
       return await this.debtsRepo.findManyByOrg(organizationId);
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[DebtsService.list] Unexpected error:", error);
+      Logger.error("[DebtsService.list] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve debts.");
     }
   }
@@ -32,8 +32,9 @@ export class DebtsService {
       };
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[DebtsService.summary] Unexpected error:", error);
+      Logger.error("[DebtsService.summary] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve debt summary.");
     }
   }
 }
+

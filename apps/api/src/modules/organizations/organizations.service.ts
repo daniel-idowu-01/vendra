@@ -1,4 +1,4 @@
-import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { HttpException, Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { OrganizationsRepository } from "./repositories/organizations.repository";
 
 @Injectable()
@@ -10,8 +10,9 @@ export class OrganizationsService {
       return await this.orgRepo.findActiveMembershipsByUser(userId);
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[OrganizationsService.listMemberships] Unexpected error:", error);
+      Logger.error("[OrganizationsService.listMemberships] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve organizations.");
     }
   }
 }
+

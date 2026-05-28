@@ -10,9 +10,6 @@ import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 import { WhatsAppService } from "./whatsapp.service";
 
 // WhatsAppProcessor
-//
-//
-
 @Processor("whatsapp-inbound")
 export class WhatsAppProcessor extends WorkerHost {
   private readonly logger = new Logger(WhatsAppProcessor.name);
@@ -145,8 +142,6 @@ export class WhatsAppProcessor extends WorkerHost {
       this.logger.error("Unexpected processor error", error as Error);
     }
   }
-
-  //
   // Returns true if the message was consumed by a pending action, false if the
   // caller should treat it as a fresh intent.
 
@@ -346,3 +341,5 @@ export class WhatsAppProcessor extends WorkerHost {
     }
   }
 }
+
+

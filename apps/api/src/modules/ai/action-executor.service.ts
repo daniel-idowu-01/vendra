@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { CustomersService } from "../customers/customers.service";
@@ -193,7 +193,7 @@ export class ActionExecutorService {
           return action.response || "I'm not sure how to help with that. Try asking about products, sales, customers, or debts.";
       }
     } catch (error) {
-      console.error(`[ActionExecutorService] Error executing "${toolName}":`, error);
+      Logger.error(`[ActionExecutorService] Error executing "${toolName}":`, error);
       return "⚠️ Something went wrong while processing your request. Please try again in a moment.";
     }
   }
@@ -272,7 +272,7 @@ export class ActionExecutorService {
           `• ${item.quantity}× ${product.name} @ ₦${item.unitPrice.toLocaleString("en-NG")} = ₦${lineTotal.toLocaleString("en-NG")}`
         );
       } catch (err) {
-        console.error(`[ActionExecutorService] Failed to record sale item "${item.name}":`, err);
+        Logger.error(`[ActionExecutorService] Failed to record sale item "${item.name}":`, err);
         errors.push(`  ✗ ${item.name} (failed)`);
       }
     }
@@ -393,3 +393,6 @@ export class ActionExecutorService {
     return items;
   }
 }
+
+
+
