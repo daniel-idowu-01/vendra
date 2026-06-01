@@ -28,6 +28,7 @@ export type ToolName =
   | "createInvoiceDraft"
   | "createCustomer"
   | "recordDebt"
+  | "settleDebt"
   | "unknown";
 
 export type ProposedAction = {
@@ -62,6 +63,7 @@ WRITE  (requiresConfirmation: true — user MUST confirm before execution)
   createProduct    → user wants to add a new product
   createCustomer   → user wants to add a new customer
   recordDebt       → user says someone owes them money
+  settleDebt       → user says a customer paid/settled debt
   createInvoiceDraft → user wants to generate an invoice
 
 FALLBACK
@@ -84,6 +86,10 @@ For createCustomer — extract:
 For recordDebt — extract:
   { "customerName": string, "amount": number }
   If amount is missing, set amount to 0 and ask in response.
+
+For settleDebt — extract:
+  { "customerName": string, "amount": number | null }
+  If amount is missing, set amount to null (means settle full outstanding).
 
 For getStockLevel — extract:
   { "productName": string }  (use productName, NOT productId)
@@ -301,11 +307,11 @@ export class AiService {
     const VALID_TOOLS: ToolName[] = [
       "getStockLevel", "recordSale", "listProducts", "listTopDebtors",
       "debtSummary", "todaySales", "lowStockAlert", "listCustomers",
-      "createProduct", "createInvoiceDraft", "createCustomer", "recordDebt", "unknown"
+      "createProduct", "createInvoiceDraft", "createCustomer", "recordDebt", "settleDebt", "unknown"
     ];
 
     const WRITE_TOOLS: ToolName[] = [
-      "recordSale", "createProduct", "createCustomer", "recordDebt", "createInvoiceDraft"
+      "recordSale", "createProduct", "createCustomer", "recordDebt", "settleDebt", "createInvoiceDraft"
     ];
     if (!VALID_TOOLS.includes(action.toolName)) {
       Logger.warn(`[AiService] LLM returned unknown toolName "${action.toolName}", resetting to unknown`);
@@ -341,6 +347,14 @@ export class AiService {
       if (typeof raw === "string") {
         const n = parseFloat(String(raw).replace(/,/g, ""));
         action.parameters.amount = isNaN(n) ? 0 : n;
+      }
+    }
+
+    if (action.toolName === "settleDebt") {
+      const raw = action.parameters.amount;
+      if (typeof raw === "string") {
+        const n = parseFloat(String(raw).replace(/,/g, ""));
+        action.parameters.amount = isNaN(n) ? null : n;
       }
     }
 
@@ -403,6 +417,13 @@ export class AiService {
     }
     if (/\b(who owes|top debtor|list debt|show debt|debt report|outstanding)\b/.test(m)) {
       return this.makeReadAction("DEBT_LOOKUP", "listTopDebtors", {}, "Fetching debtors…");
+    }
+    if (/\b(settled?|paid|payment made|cleared?)\b.*\b(debt|owe|owing|balance)\b/.test(m)) {
+      return {
+        intent: "DEBT_CREATE", confidence: 0.8, toolName: "settleDebt",
+        parameters: { sourceText: message }, requiresConfirmation: true,
+        response: "I'll mark that debt as paid. Please confirm the customer name and amount paid (or say full payment)."
+      };
     }
     if (/\b(all debts?|full debt|debt summary)\b/.test(m)) {
       return this.makeReadAction("DEBT_LOOKUP", "debtSummary", {}, "Fetching full debt report…");

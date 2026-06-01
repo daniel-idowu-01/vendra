@@ -177,6 +177,54 @@ export class ActionExecutorService {
           );
         }
 
+        case "settleDebt": {
+          const customerName = this.requireString(parameters, ["customerName", "name"], "customer name");
+          const amount = this.requireNumber(parameters, ["amount"]);
+
+          const customer = await this.prisma.customer.findFirst({
+            where: { organizationId, name: { equals: customerName, mode: "insensitive" } }
+          });
+          if (!customer) return `No customer found for "${customerName}".`;
+
+          const openDebts = await this.prisma.debtRecord.findMany({
+            where: { organizationId, customerId: customer.id, status: "OPEN", outstanding: { gt: 0 } },
+            orderBy: { createdAt: "asc" }
+          });
+          if (openDebts.length === 0) return `✅ ${customer.name} has no open debts.`;
+
+          const totalOutstanding = openDebts.reduce((s, d) => s + Number(d.outstanding), 0);
+
+          if (amount === null || amount >= totalOutstanding) {
+            for (const debt of openDebts) {
+              await this.prisma.debtRecord.update({
+                where: { id: debt.id },
+                data: { outstanding: 0, status: "PAID" }
+              });
+            }
+            return `✅ *Debt settled*\nCustomer: ${customer.name}\nAmount: ₦${totalOutstanding.toLocaleString("en-NG")}\nStatus: Fully paid`;
+          }
+
+          if (amount <= 0) {
+            return "⚠️ Amount paid must be greater than 0.";
+          }
+
+          let remaining = amount;
+          for (const debt of openDebts) {
+            if (remaining <= 0) break;
+            const current = Number(debt.outstanding);
+            const paid = Math.min(current, remaining);
+            const nextOutstanding = current - paid;
+            await this.prisma.debtRecord.update({
+              where: { id: debt.id },
+              data: { outstanding: nextOutstanding, status: nextOutstanding <= 0 ? "PAID" : "PARTIALLY_PAID" }
+            });
+            remaining -= paid;
+          }
+
+          const newOutstanding = Math.max(totalOutstanding - amount, 0);
+          return `✅ *Debt payment recorded*\nCustomer: ${customer.name}\nPaid: ₦${amount.toLocaleString("en-NG")}\nOutstanding: ₦${newOutstanding.toLocaleString("en-NG")}`;
+        }
+
         case "recordSale": {
           return await this.handleRecordSale(organizationId, parameters);
         }
