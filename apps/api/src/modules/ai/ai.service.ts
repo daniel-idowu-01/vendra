@@ -1,6 +1,7 @@
 import { HttpException, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { InferenceClient } from "@huggingface/inference";
 import { AiRepository } from "./repositories/ai.repository";
 
 export type IntentType =
@@ -113,12 +114,20 @@ OUTPUT FORMAT  — valid JSON only, no markdown, no code fences
 export class AiService {
   private readonly genAI: GoogleGenerativeAI;
   private readonly model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>;
+  private readonly huggingFaceApiKey: string;
+  private readonly huggingFaceModel: string;
+  private readonly hfClient: InferenceClient;
+  private static geminiBackoffUntilMs = 0;
 
   constructor(
     private readonly aiRepo: AiRepository,
     private readonly config: ConfigService
   ) {
     const geminiKey = this.config.get<string>("GEMINI_API_KEY") ?? "";
+    this.huggingFaceApiKey = this.config.get<string>("HUGGINGFACE_API_KEY") ?? "";
+    this.huggingFaceModel =
+      this.config.get<string>("HUGGINGFACE_MODEL") ?? "meta-llama/Llama-3.1-8B-Instruct:scaleway";
+    this.hfClient = new InferenceClient(this.huggingFaceApiKey);
     this.genAI = new GoogleGenerativeAI(geminiKey);
     this.model = this.genAI.getGenerativeModel({
       model: "gemini-2.0-flash",
@@ -142,10 +151,30 @@ export class AiService {
     let provider = "unknown";
 
     try {
-      proposed = await this.classifyWithGemini(message, history);
-      provider = "gemini";
-    } catch (geminiErr) {
-      Logger.warn("[AiService] Gemini classification failed:", (geminiErr as Error)?.message);
+      if (this.huggingFaceApiKey) {
+        proposed = await this.classifyWithHuggingFace(message, history);
+        provider = "huggingface";
+      } else {
+        proposed = await this.classifyWithGemini(message, history);
+        provider = "gemini";
+      }
+    } catch (primaryErr) {
+      Logger.warn("[AiService] Primary AI classification failed:", (primaryErr as Error)?.message);
+      try {
+        if (this.huggingFaceApiKey) {
+          proposed = await this.classifyWithGemini(message, history);
+          provider = "gemini";
+        } else {
+          throw primaryErr;
+        }
+      } catch (secondaryErr) {
+        Logger.warn("[AiService] Secondary AI classification failed:", (secondaryErr as Error)?.message);
+        proposed = this.fallbackClassify(message, history);
+        provider = "fallback";
+      }
+    }
+
+    if (!proposed!) {
       proposed = this.fallbackClassify(message, history);
       provider = "fallback";
     }
@@ -173,6 +202,10 @@ export class AiService {
     history: { role: string; content: string }[],
     retries = 3
   ): Promise<ProposedAction> {
+    if (Date.now() < AiService.geminiBackoffUntilMs) {
+      throw new Error("Gemini temporarily disabled due to recent quota/rate-limit error");
+    }
+
     const contextBlock =
       history.length > 0
         ? history.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n")
@@ -193,6 +226,10 @@ export class AiService {
           errStr.includes("quota") ||
           errStr.includes("RESOURCE_EXHAUSTED");
 
+        if (isQuota) {
+          AiService.geminiBackoffUntilMs = Date.now() + 60_000;
+        }
+
         if (isQuota && attempt < retries) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
           Logger.warn(`[AiService] Gemini rate-limited (attempt ${attempt}/${retries}), retrying in ${delay}ms`);
@@ -212,6 +249,51 @@ export class AiService {
       .trim();
     const parsed = JSON.parse(clean) as ProposedAction;
     return parsed;
+  }
+
+  private async classifyWithHuggingFace(
+    message: string,
+    history: { role: string; content: string }[],
+    retries = 2
+  ): Promise<ProposedAction> {
+    if (!this.huggingFaceApiKey || this.huggingFaceApiKey === "replace-me") {
+      throw new Error("HuggingFace API key not configured");
+    }
+
+    const contextBlock =
+      history.length > 0
+        ? history.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n")
+        : "No prior conversation.";
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const chatCompletion = await this.hfClient.chatCompletion({
+          model: this.huggingFaceModel,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "system", content: `Conversation history:\n${contextBlock}` },
+            { role: "user", content: message }
+          ],
+          temperature: 0.2,
+          max_tokens: 500
+        });
+
+        const raw = chatCompletion.choices[0]?.message?.content ?? "";
+        if (!raw) {
+          throw new Error(`Empty response from HuggingFace model "${this.huggingFaceModel}"`);
+        }
+        return this.parseJsonResponse(raw);
+      } catch (err) {
+        if (attempt < retries) {
+          const delay = 1000 * attempt;
+          Logger.warn(`[AiService] Hugging Face failed (attempt ${attempt}/${retries}), retrying in ${delay}ms`);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("Hugging Face classification failed after all retries");
   }
 
   
