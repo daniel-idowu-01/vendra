@@ -33,7 +33,7 @@ export class ActionExecutorService {
           if (products.items.length === 0) return "Your inventory is empty. Reply *add product [name] [price]* to add one.";
           const lines = products.items.map(
             (p: any, i: number) =>
-              `${i + 1}. ${p.name} — ₦${Number(p.sellingPrice).toLocaleString("en-NG")} per ${p.unit ?? "unit"}`
+              `${i + 1}. ${p.name} — ₦${Number(p.sellingPrice).toLocaleString("en-NG")} per ${p.unit ?? "unit"} | Qty: ${Number(p.quantity ?? 0).toLocaleString("en-NG")}`
           );
           return `📦 *Products (${products.total} total)*\n${lines.join("\n")}`;
         }
