@@ -1,4 +1,4 @@
-import { INestApplication, ValidationPipe, VersioningType } from "@nestjs/common";
+import { INestApplication, Logger, ValidationPipe, VersioningType } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import helmet from "helmet";
@@ -13,7 +13,7 @@ async function listenWithRetry(app: INestApplication, port: number, maxRetries =
       return;
     } catch (err: any) {
       if (err?.code === "EADDRINUSE" && attempt < maxRetries) {
-        console.warn(`Port ${port} in use, retrying in 1s (attempt ${attempt}/${maxRetries})`);
+        Logger.warn(`Port ${port} in use, retrying in 1s (attempt ${attempt}/${maxRetries})`);
         await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
@@ -42,8 +42,10 @@ async function bootstrap() {
   );
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new RequestIdInterceptor());
+  app.enableShutdownHooks();
 
   await listenWithRetry(app, config.get<number>("PORT", 4000));
 }
 
 void bootstrap();
+

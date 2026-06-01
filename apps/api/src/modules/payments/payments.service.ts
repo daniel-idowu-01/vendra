@@ -1,4 +1,4 @@
-import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { HttpException, Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { PaymentsRepository } from "./repositories/payments.repository";
 
 @Injectable()
@@ -18,8 +18,9 @@ export class PaymentsService {
       });
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[PaymentsService.handlePaystackWebhook] Unexpected error:", error);
+      Logger.error("[PaymentsService.handlePaystackWebhook] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to process payment webhook.");
     }
   }
 }
+

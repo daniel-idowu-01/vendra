@@ -1,5 +1,5 @@
 import { InjectQueue } from "@nestjs/bullmq";
-import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { HttpException, Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Queue } from "bullmq";
 import { WhatsAppRepository } from "./repositories/whatsapp.repository";
@@ -31,7 +31,7 @@ export class WhatsAppService {
       return { queued: true, providerEventId };
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[WhatsAppService.enqueueInbound] Unexpected error:", error);
+      Logger.error("[WhatsAppService.enqueueInbound] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to enqueue WhatsApp message.");
     }
   }
@@ -46,7 +46,7 @@ export class WhatsAppService {
       const accessToken = this.config.get<string>("META_WHATSAPP_ACCESS_TOKEN");
 
       if (!phoneNumberId || !accessToken) {
-        console.warn("[WhatsAppService.sendText] WhatsApp not configured for org", organizationId);
+        Logger.warn("[WhatsAppService.sendText] WhatsApp not configured for org", organizationId);
         return;
       }
 
@@ -68,7 +68,7 @@ export class WhatsAppService {
 
       const body = await res.json();
       if (!res.ok) {
-        console.error("[WhatsAppService.sendText] Meta API error:", body);
+        Logger.error("[WhatsAppService.sendText] Meta API error:", body);
         return;
       }
 
@@ -82,7 +82,7 @@ export class WhatsAppService {
         text
       });
     } catch (err) {
-      console.error("[WhatsAppService.sendText] Unexpected error:", err);
+      Logger.error("[WhatsAppService.sendText] Unexpected error:", err);
     }
   }
 
@@ -96,3 +96,4 @@ export class WhatsAppService {
     return `wa-${Math.abs(hash)}`;
   }
 }
+

@@ -1,4 +1,4 @@
-import { HttpException, Injectable, InternalServerErrorException } from "@nestjs/common";
+import { HttpException, Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { CustomersRepository } from "./repositories/customers.repository";
 import { CreateCustomerDto } from "./dto/create-customer.dto";
 
@@ -11,7 +11,7 @@ export class CustomersService {
       return await this.customersRepo.findManyByOrg(organizationId);
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[CustomersService.list] Unexpected error:", error);
+      Logger.error("[CustomersService.list] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve customers.");
     }
   }
@@ -26,8 +26,9 @@ export class CustomersService {
       });
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      console.error("[CustomersService.create] Unexpected error:", error);
+      Logger.error("[CustomersService.create] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to create customer.");
     }
   }
 }
+

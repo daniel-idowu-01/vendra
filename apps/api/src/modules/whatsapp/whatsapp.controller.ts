@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Post, Query, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { WhatsAppService } from "./whatsapp.service";
 
@@ -26,8 +26,9 @@ export class WhatsAppController {
     const msg = payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
     const text = msg?.text?.body;
     if (text) {
-      console.log(`[WhatsApp] Inbound from ${msg.from}: "${text}"`);
+      Logger.log(`[WhatsApp] Inbound from ${msg.from}: "${text}"`);
     }
     return this.whatsapp.enqueueInbound(signature, payload);
   }
 }
+
