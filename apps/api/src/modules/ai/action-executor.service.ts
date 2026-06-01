@@ -178,6 +178,29 @@ export class ActionExecutorService {
         }
 
         case "settleDebt": {
+          const rawName = String(parameters.customerName ?? parameters.name ?? "").trim().toLowerCase();
+          const rawSource = String(parameters.sourceText ?? "").trim().toLowerCase();
+          const phraseMeansAll = (text: string) =>
+            /\b(everyone|everybody|all|no one|nobody|none)\b/.test(text) ||
+            (/\b(owes?|owing|debt|balance)\b/.test(text) && /\b(no one|nobody|none|all)\b/.test(text));
+          const nameMeansAll = phraseMeansAll(rawName) || phraseMeansAll(rawSource);
+          const settleAll = Boolean(parameters.settleAll) || nameMeansAll;
+          if (settleAll) {
+            const openDebts = await this.prisma.debtRecord.findMany({
+              where: { organizationId, outstanding: { gt: 0 } }
+            });
+            if (openDebts.length === 0) return "✅ No outstanding debts to settle.";
+
+            const totalOutstanding = openDebts.reduce((s, d) => s + Number(d.outstanding), 0);
+            for (const debt of openDebts) {
+              await this.prisma.debtRecord.update({
+                where: { id: debt.id },
+                data: { outstanding: 0, status: "PAID" }
+              });
+            }
+            return `✅ *All debts settled*\nTotal cleared: ₦${totalOutstanding.toLocaleString("en-NG")}`;
+          }
+
           const customerName = this.requireString(parameters, ["customerName", "name"], "customer name");
           const amount = this.requireNumber(parameters, ["amount"]);
 
@@ -187,7 +210,7 @@ export class ActionExecutorService {
           if (!customer) return `No customer found for "${customerName}".`;
 
           const openDebts = await this.prisma.debtRecord.findMany({
-            where: { organizationId, customerId: customer.id, status: "OPEN", outstanding: { gt: 0 } },
+            where: { organizationId, customerId: customer.id, outstanding: { gt: 0 } },
             orderBy: { createdAt: "asc" }
           });
           if (openDebts.length === 0) return `✅ ${customer.name} has no open debts.`;

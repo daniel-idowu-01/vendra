@@ -351,6 +351,11 @@ export class AiService {
     }
 
     if (action.toolName === "settleDebt") {
+      if (typeof action.parameters.settleAll === "string") {
+        action.parameters.settleAll = ["true", "yes", "1", "all"].includes(
+          action.parameters.settleAll.toLowerCase()
+        );
+      }
       const raw = action.parameters.amount;
       if (typeof raw === "string") {
         const n = parseFloat(String(raw).replace(/,/g, ""));
@@ -417,6 +422,13 @@ export class AiService {
     }
     if (/\b(who owes|top debtor|list debt|show debt|debt report|outstanding)\b/.test(m)) {
       return this.makeReadAction("DEBT_LOOKUP", "listTopDebtors", {}, "Fetching debtors…");
+    }
+    if (/\b(no one|nobody|none)\b.*\b(owes?|owing|debt|balance)\b/.test(m)) {
+      return {
+        intent: "DEBT_CREATE", confidence: 0.85, toolName: "settleDebt",
+        parameters: { settleAll: true, amount: null, sourceText: message }, requiresConfirmation: true,
+        response: "Understood. This will mark all outstanding debts as fully paid. Reply YES to confirm."
+      };
     }
     if (/\b(settled?|paid|payment made|cleared?)\b.*\b(debt|owe|owing|balance)\b/.test(m)) {
       return {
