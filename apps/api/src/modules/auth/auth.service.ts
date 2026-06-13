@@ -105,11 +105,22 @@ export class AuthService {
         throw new BadRequestException("No active organization found for this user");
       }
 
+      const existingForUser = await this.prisma.whatsAppIdentity.findFirst({
+        where: { userId }
+      });
+      if (existingForUser && existingForUser.phone !== normalizedPhone) {
+        throw new ConflictException(
+          "You already have a WhatsApp number linked. Unlink it before linking another number."
+        );
+      }
+      if (existingForUser && existingForUser.phone === normalizedPhone) {
+        return { linked: true, phone: normalizedPhone };
+      }
+
       const existing = await this.prisma.whatsAppIdentity.findUnique({ where: { phone: normalizedPhone } });
       if (existing && existing.userId !== userId) {
         throw new ConflictException("This phone number is already linked to another account");
       }
-      if (existing && existing.userId === userId) return { linked: true, phone: normalizedPhone };
 
       await this.prisma.whatsAppIdentity.create({
         data: { phone: normalizedPhone, userId, organizationId: resolvedOrganizationId }
