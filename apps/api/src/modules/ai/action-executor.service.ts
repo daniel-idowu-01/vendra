@@ -30,7 +30,9 @@ export class ActionExecutorService {
 
         case "listProducts": {
           const products = await this.inventory.listProducts(organizationId, { page: 1, pageSize: 25 });
-          if (products.items.length === 0) return "Your inventory is empty. Reply *add product [name] [price]* to add one.";
+          if (products.items.length === 0) {
+            return "Your inventory is empty. Reply *add product [name] [price] qty [stock count]* to add one.";
+          }
           const lines = products.items.map(
             (p: any, i: number) =>
               `${i + 1}. ${p.name} — ₦${Number(p.sellingPrice).toLocaleString("en-NG")} per ${p.unit ?? "unit"} | Qty: ${Number(p.quantity ?? 0).toLocaleString("en-NG")}`
@@ -130,18 +132,26 @@ export class ActionExecutorService {
         }
 
         case "createProduct": {
-          const name = this.requireString(parameters, ["name", "productName"], "product name");
-          const price = this.requireNumber(parameters, ["sellingPrice", "price", "amount"]) ?? 0;
+          const parsedProduct = this.parseProductText(String(parameters.sourceText ?? ""));
+          const name = this.optionalString(parameters, ["name", "productName"]) ?? parsedProduct.name ??
+            this.requireString(parameters, ["name", "productName"], "product name");
+          const price = this.requireNumber(parameters, ["sellingPrice", "price", "amount"]) ?? parsedProduct.price ?? 0;
+          const initialQuantity =
+            this.optionalNumber(parameters, ["initialQuantity", "quantity", "qty", "stockCount", "stock"]) ??
+            parsedProduct.initialQuantity ??
+            0;
           const unit = this.optionalString(parameters, ["unit"]) ?? "unit";
           const product = await this.inventory.createProduct(organizationId, {
             name,
             sellingPrice: price,
-            unit
+            unit,
+            initialQuantity
           });
-          return (
-            `✅ *Product created*\nName: ${product.name}\n` +
-            `Price: ₦${Number(product.sellingPrice).toLocaleString("en-NG")} per ${product.unit}`
-          );
+          return [
+            `Product created: ${product.name}`,
+            `Price: NGN ${Number(product.sellingPrice).toLocaleString("en-NG")} per ${product.unit}`,
+            `Opening stock: ${initialQuantity.toLocaleString("en-NG")} ${product.unit}`
+          ].join("\n");
         }
 
         case "deleteZeroStockProducts": {
@@ -326,21 +336,23 @@ export class ActionExecutorService {
         });
 
         if (!product) {
-          product = await this.prisma.product.create({
-            data: {
-              organizationId,
-              name: item.name,
-              sellingPrice: item.unitPrice,
-              unit: "unit",
-              lowStockLevel: 5
-            }
-          });
+          errors.push(`  - ${item.name}: product not found. Add it with stock count first.`);
+          continue;
         } else if (Number(product.sellingPrice) !== item.unitPrice && item.unitPrice > 0) {
           // Update price only if a new explicit price was provided
           product = await this.prisma.product.update({
             where: { id: product.id },
             data: { sellingPrice: item.unitPrice }
           });
+        }
+
+        const stock = await this.inventory.getStockLevel(organizationId, product.id);
+        const available = stock.byBranch.find((row) => row.branchId === branch.id)?.quantity ?? 0;
+        if (available < item.quantity) {
+          errors.push(
+            `  - ${product.name}: only ${available.toLocaleString("en-NG")} ${product.unit} available, cannot sell ${item.quantity.toLocaleString("en-NG")}.`
+          );
+          continue;
         }
 
         await this.inventory.recordTransaction(organizationId, {
@@ -353,8 +365,12 @@ export class ActionExecutorService {
 
         const lineTotal = item.quantity * item.unitPrice;
         totalAmount += lineTotal;
+        const remaining = available - item.quantity;
+        const stockNotice = remaining <= product.lowStockLevel
+          ? ` | Low stock: ${remaining.toLocaleString("en-NG")} left`
+          : ` | Stock left: ${remaining.toLocaleString("en-NG")}`;
         recordedLines.push(
-          `• ${item.quantity}× ${product.name} @ ₦${item.unitPrice.toLocaleString("en-NG")} = ₦${lineTotal.toLocaleString("en-NG")}`
+          `• ${item.quantity}x ${product.name} @ NGN ${item.unitPrice.toLocaleString("en-NG")} = NGN ${lineTotal.toLocaleString("en-NG")}${stockNotice}`
         );
       } catch (err) {
         Logger.error(`[ActionExecutorService] Failed to record sale item "${item.name}":`, err);
@@ -430,6 +446,48 @@ export class ActionExecutorService {
       if (typeof val === "string" && val.trim().length > 0) return val.trim();
     }
     return undefined;
+  }
+
+  private optionalNumber(
+    params: Record<string, unknown>,
+    keys: string[]
+  ): number | undefined {
+    for (const key of keys) {
+      const val = params[key];
+      if (typeof val === "number" && !isNaN(val)) return val;
+      if (typeof val === "string") {
+        const n = parseFloat(val.replace(/,/g, ""));
+        if (!isNaN(n)) return n;
+      }
+    }
+    return undefined;
+  }
+
+  private parseProductText(source: string): {
+    name?: string;
+    price?: number;
+    initialQuantity?: number;
+  } {
+    const text = source.trim();
+    if (!text) return {};
+
+    const normalized = text.replace(/,/g, "");
+    const stockMatch = normalized.match(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*(\d+)\b/i);
+    const textWithoutStock = normalized.replace(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*\d+\b/gi, "");
+    const priceMatch = textWithoutStock.match(/(?:price\s*)?(?:ngn|n|₦|#)?\s*(\d+(?:\.\d+)?)/i);
+    const price = priceMatch ? parseFloat(priceMatch[1]) : undefined;
+    const initialQuantity = stockMatch ? parseInt(stockMatch[1], 10) : undefined;
+
+    const name = text
+      .replace(/\b(add|create|new)\b/gi, "")
+      .replace(/\b(products?|items?)\b/gi, "")
+      .replace(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*\d+\b/gi, "")
+      .replace(/(?:price\s*)?(?:ngn|n|₦|#)?\s*[\d,]+(?:\.\d+)?/i, "")
+      .replace(/\b(?:for|at|@|each|per)\b/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    return { name: name || undefined, price, initialQuantity };
   }
 
   

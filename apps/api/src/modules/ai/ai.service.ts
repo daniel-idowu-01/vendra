@@ -530,6 +530,17 @@ export class AiService {
       };
     }
 
+    if (/\b(add|create|new)\b.*\b(products?|items?)\b/.test(m)) {
+      return {
+        intent: "INVENTORY_SALE",
+        confidence: 0.9,
+        toolName: "createProduct",
+        parameters: { sourceText: message },
+        requiresConfirmation: true,
+        response: "Create this product with its opening stock count if provided? Example: White shirt 10000 qty 5. Reply YES to confirm."
+      };
+    }
+
     const deleteZeroStock =
       /\b(delete|remove|clear)\b.*\b(products?|items?|inventory)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b/.test(m) ||
       /\b(delete|remove|clear)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b.*\b(products?|items?|inventory)\b/.test(m);

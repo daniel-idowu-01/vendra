@@ -18,7 +18,15 @@ export class InventoryService {
         this.inventoryRepo.findProductsByOrg(organizationId, pagination),
         this.inventoryRepo.countProductsByOrg(organizationId)
       ]);
-      return { items, total, page: pagination.page, pageSize: pagination.pageSize };
+      return {
+        items: items.map(({ batches, ...product }) => ({
+          ...product,
+          quantity: batches.reduce((sum, batch) => sum + batch.quantity, 0)
+        })),
+        total,
+        page: pagination.page,
+        pageSize: pagination.pageSize
+      };
     } catch (error) {
       if (error instanceof HttpException) throw error;
       Logger.error("[InventoryService.listProducts] Unexpected error:", error);
@@ -30,15 +38,61 @@ export class InventoryService {
     try {
       const name = dto.name?.trim();
       if (!name) throw new BadRequestException("Product name is required.");
-      return await this.inventoryRepo.createProduct({
-        organization: { connect: { id: organizationId } },
-        name,
-        sku: dto.sku,
-        barcode: dto.barcode,
-        unit: dto.unit ?? "unit",
-        costPrice: dto.costPrice ?? 0,
-        sellingPrice: dto.sellingPrice ?? 0,
-        lowStockLevel: dto.lowStockLevel ?? 5
+      const initialQuantity = dto.initialQuantity ?? 0;
+      if (initialQuantity > 0) {
+        const branch = await this.prisma.branch.findFirst({
+          where: { organizationId },
+          orderBy: { createdAt: "asc" }
+        });
+        if (!branch) throw new BadRequestException("Cannot add opening stock because no branch exists.");
+      }
+
+      return await this.prisma.$transaction(async (tx) => {
+        const product = await tx.product.create({
+          data: {
+            organization: { connect: { id: organizationId } },
+            name,
+            sku: dto.sku,
+            barcode: dto.barcode,
+            unit: dto.unit ?? "unit",
+            costPrice: dto.costPrice ?? 0,
+            sellingPrice: dto.sellingPrice ?? 0,
+            lowStockLevel: dto.lowStockLevel ?? 5
+          }
+        });
+
+        if (initialQuantity <= 0) return product;
+
+        const branch = await tx.branch.findFirst({
+          where: { organizationId },
+          orderBy: { createdAt: "asc" }
+        });
+        if (!branch) throw new BadRequestException("Cannot add opening stock because no branch exists.");
+
+        const transaction = await this.inventoryRepo.createTransaction({
+          organizationId,
+          productId: product.id,
+          branchId: branch.id,
+          type: "STOCK_IN",
+          quantity: initialQuantity,
+          note: "Opening stock"
+        }, tx);
+
+        await this.inventoryRepo.createBatch({
+          organizationId,
+          productId: product.id,
+          branchId: branch.id,
+          quantity: initialQuantity
+        }, tx);
+
+        await this.inventoryRepo.createAuditLog({
+          organizationId,
+          productId: product.id,
+          action: "STOCK_IN",
+          metadata: { transactionId: transaction.id, quantity: initialQuantity, source: "opening_stock" }
+        }, tx);
+
+        return product;
       });
     } catch (error) {
       if (error instanceof HttpException) throw error;

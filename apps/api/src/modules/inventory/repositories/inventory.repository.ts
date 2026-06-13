@@ -17,6 +17,7 @@ export class InventoryRepository {
     const skip = (page - 1) * pageSize;
     return this.prisma.product.findMany({
       where: { organizationId, isActive: true },
+      include: { batches: true },
       orderBy: { name: "asc" },
       skip,
       take: pageSize
