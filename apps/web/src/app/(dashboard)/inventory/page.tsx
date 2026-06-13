@@ -16,6 +16,7 @@ export default function InventoryPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPrice, setNewPrice] = useState("");
+  const [newQuantity, setNewQuantity] = useState("");
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<ProductImportResult | null>(null);
   const [importError, setImportError] = useState("");
@@ -35,11 +36,13 @@ export default function InventoryPage() {
     if (!newName) return;
     await createProduct.mutateAsync({
       name: newName,
-      sellingPrice: Number(newPrice) || 0
+      sellingPrice: Number(newPrice) || 0,
+      initialQuantity: Number(newQuantity) || 0
     });
     setShowAdd(false);
     setNewName("");
     setNewPrice("");
+    setNewQuantity("");
   };
 
   const handleImport = async () => {
@@ -121,6 +124,7 @@ export default function InventoryPage() {
           <p className="text-sm font-semibold">New product</p>
           <input className="input-surface w-full" placeholder="Product name" value={newName} onChange={(e) => setNewName(e.target.value)} />
           <input className="input-surface w-full" placeholder="Selling price" type="number" value={newPrice} onChange={(e) => setNewPrice(e.target.value)} />
+          <input className="input-surface w-full" placeholder="Opening quantity" type="number" value={newQuantity} onChange={(e) => setNewQuantity(e.target.value)} />
           <div className="flex gap-2">
             <Button onClick={handleAdd} disabled={createProduct.isPending} className="flex-1">
               {createProduct.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

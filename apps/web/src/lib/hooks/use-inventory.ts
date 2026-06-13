@@ -45,6 +45,7 @@ export function useCreateProduct() {
       costPrice?: number;
       sellingPrice?: number;
       lowStockLevel?: number;
+      initialQuantity?: number;
     }) => apiFetch<Product>("/inventory/products", { method: "POST", body: JSON.stringify(data) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
