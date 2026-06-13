@@ -109,7 +109,7 @@ export default function LoginPage() {
               <label className="mb-2 block text-sm font-semibold text-foreground">WhatsApp number (optional)</label>
               <input
                 className="input-surface w-full"
-                placeholder="+2349028686300"
+                placeholder="+2348123456789"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />

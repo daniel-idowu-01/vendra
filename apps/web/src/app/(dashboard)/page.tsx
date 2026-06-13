@@ -195,7 +195,7 @@ export default function DashboardPage() {
               <div className="flex gap-2">
                 <input
                   className="input-surface flex-1"
-                  placeholder="+2349028686300"
+                  placeholder="+2348123456789"
                   value={linkPhone}
                   onChange={(e) => setLinkPhone(e.target.value)}
                 />
