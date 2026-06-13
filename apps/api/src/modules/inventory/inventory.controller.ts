@@ -17,6 +17,11 @@ export class InventoryController {
     return this.inventory.listProducts(tenant.organizationId, pagination);
   }
 
+  @Get("branches")
+  listBranches(@CurrentTenant() tenant: TenantContext) {
+    return this.inventory.listBranches(tenant.organizationId);
+  }
+
   @Post("products")
   createProduct(@CurrentTenant() tenant: TenantContext, @Body() dto: CreateProductDto) {
     return this.inventory.createProduct(tenant.organizationId, dto);

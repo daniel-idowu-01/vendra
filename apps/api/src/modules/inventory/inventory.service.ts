@@ -42,6 +42,14 @@ export class InventoryService {
     }
   }
 
+  async listBranches(organizationId: string) {
+    return this.prisma.branch.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true }
+    });
+  }
+
   async createProduct(organizationId: string, dto: CreateProductDto) {
     try {
       const name = dto.name?.trim();

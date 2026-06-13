@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Check, Loader2, Mic, Phone, Plus, Send, Unlink } from "lucide-react";
 import { useDashboard, useDebtSummary, useLowStock } from "@/lib/hooks/use-dashboard";
-import { useRecordTransaction } from "@/lib/hooks/use-inventory";
+import { useProducts, useBranches, useRecordTransaction } from "@/lib/hooks/use-inventory";
 import { useAuthStore } from "@/lib/auth-store";
 import { apiFetch } from "@/lib/api-client";
 import { formatCurrency } from "@/lib/format";
@@ -18,6 +18,8 @@ export default function DashboardPage() {
   const { data: dash, isLoading: dashLoading } = useDashboard();
   const { data: debtSummary } = useDebtSummary();
   const { data: lowStock } = useLowStock();
+  const { data: products } = useProducts(1, 100);
+  const { data: branches } = useBranches();
   const recordSale = useRecordTransaction();
   const orgId = useAuthStore((s) => s.organizationId);
   const { data: whatsAppLink, isLoading: whatsAppLinkLoading } = useQuery({
@@ -122,8 +124,18 @@ export default function DashboardPage() {
       {showQuickSale && (
         <Card className="animate-fade-up space-y-4">
           <p className="text-sm font-semibold">Quick Sale</p>
-          <input className="input-surface w-full" placeholder="Product ID" value={saleProduct} onChange={(e) => setSaleProduct(e.target.value)} />
-          <input className="input-surface w-full" placeholder="Branch ID" value={saleBranch} onChange={(e) => setSaleBranch(e.target.value)} />
+          <select className="input-surface w-full" value={saleProduct} onChange={(e) => setSaleProduct(e.target.value)}>
+            <option value="" disabled>Select product</option>
+            {(products?.items ?? []).map((p) => (
+              <option key={p.id} value={p.id}>{p.name} ({p.quantity} in stock)</option>
+            ))}
+          </select>
+          <select className="input-surface w-full" value={saleBranch} onChange={(e) => setSaleBranch(e.target.value)}>
+            <option value="" disabled>Select branch</option>
+            {(branches ?? []).map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
           <input className="input-surface w-full" type="number" min={1} value={saleQty} onChange={(e) => setSaleQty(Number(e.target.value))} />
           <div className="flex gap-2">
             <Button onClick={handleQuickSale} disabled={recordSale.isPending} className="flex-1">
