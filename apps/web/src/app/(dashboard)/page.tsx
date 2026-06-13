@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Check, Loader2, Mic, Phone, Plus, Send } from "lucide-react";
+import { Check, Loader2, Mic, Phone, Plus, Send, Unlink } from "lucide-react";
 import { useDashboard, useDebtSummary, useLowStock } from "@/lib/hooks/use-dashboard";
 import { useRecordTransaction } from "@/lib/hooks/use-inventory";
 import { useAuthStore } from "@/lib/auth-store";
@@ -12,31 +13,56 @@ import { apiFetch } from "@/lib/api-client";
 
 export default function DashboardPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { data: dash, isLoading: dashLoading } = useDashboard();
   const { data: debtSummary } = useDebtSummary();
   const { data: lowStock } = useLowStock();
   const recordSale = useRecordTransaction();
   const orgId = useAuthStore((s) => s.organizationId);
+  const { data: whatsAppLink, isLoading: whatsAppLinkLoading } = useQuery({
+    queryKey: ["auth", "whatsapp-link"],
+    queryFn: () => apiFetch<{ linked: boolean; phone: string | null }>("/auth/whatsapp-link")
+  });
 
   const [linkPhone, setLinkPhone] = useState("");
-  const [linking, setLinking] = useState(false);
-  const [linked, setLinked] = useState(false);
   const [linkError, setLinkError] = useState("");
+  const linkWhatsApp = useMutation({
+    mutationFn: (phone: string) =>
+      apiFetch<{ linked: boolean; phone: string }>("/auth/link-whatsapp", {
+        method: "POST",
+        body: JSON.stringify({ phone })
+      }),
+    onSuccess: async () => {
+      setLinkPhone("");
+      await queryClient.invalidateQueries({ queryKey: ["auth", "whatsapp-link"] });
+    }
+  });
+  const unlinkWhatsApp = useMutation({
+    mutationFn: () =>
+      apiFetch<{ linked: boolean; phone: string | null }>("/auth/whatsapp-link", {
+        method: "DELETE"
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["auth", "whatsapp-link"] });
+    }
+  });
 
   const handleLinkWhatsApp = async () => {
     if (!linkPhone) return;
-    setLinking(true);
     setLinkError("");
     try {
-      await apiFetch("/auth/link-whatsapp", {
-        method: "POST",
-        body: JSON.stringify({ phone: linkPhone })
-      });
-      setLinked(true);
+      await linkWhatsApp.mutateAsync(linkPhone);
     } catch (err) {
       setLinkError(err instanceof Error ? err.message : "Failed to link phone");
-    } finally {
-      setLinking(false);
+    }
+  };
+
+  const handleUnlinkWhatsApp = async () => {
+    setLinkError("");
+    try {
+      await unlinkWhatsApp.mutateAsync();
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : "Failed to unlink phone");
     }
   };
 
@@ -148,7 +174,23 @@ export default function DashboardPage() {
                 Connect your phone number so the system recognises you when you send a message via WhatsApp.
               </p>
             </div>
-            {!linked ? (
+            {whatsAppLinkLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Checking WhatsApp link...
+              </div>
+            ) : whatsAppLink?.linked ? (
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2 text-sm text-green-600">
+                  <Check className="h-4 w-4" />
+                  <span>{whatsAppLink.phone} is linked.</span>
+                </div>
+                <Button variant="secondary" onClick={handleUnlinkWhatsApp} disabled={unlinkWhatsApp.isPending}>
+                  {unlinkWhatsApp.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Unlink className="h-4 w-4" />}
+                  Unlink
+                </Button>
+              </div>
+            ) : (
               <div className="flex gap-2">
                 <input
                   className="input-surface flex-1"
@@ -156,15 +198,10 @@ export default function DashboardPage() {
                   value={linkPhone}
                   onChange={(e) => setLinkPhone(e.target.value)}
                 />
-                <Button onClick={handleLinkWhatsApp} disabled={linking || !linkPhone}>
-                  {linking ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                <Button onClick={handleLinkWhatsApp} disabled={linkWhatsApp.isPending || !linkPhone}>
+                  {linkWhatsApp.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   Link
                 </Button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 text-sm text-green-600">
-                <Check className="h-4 w-4" />
-                Linked successfully. Your WhatsApp messages will now use your organization.
               </div>
             )}
             {linkError && <p className="text-sm text-red-400">{linkError}</p>}

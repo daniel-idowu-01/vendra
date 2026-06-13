@@ -7,9 +7,24 @@ export class ApiError extends Error {
     public status: number,
     public body: { message?: string; details?: unknown }
   ) {
-    super(body.message ?? `Request failed with ${status}`);
+    super(readApiErrorMessage(body, status));
     this.name = "ApiError";
   }
+}
+
+function readApiErrorMessage(body: { message?: string; details?: unknown }, status: number) {
+  if (body.message) return body.message;
+  if (typeof body.details === "string") return body.details;
+  if (
+    body.details &&
+    typeof body.details === "object" &&
+    "message" in body.details
+  ) {
+    const details = body.details as { message?: string | string[] };
+    if (Array.isArray(details.message)) return details.message.join(", ");
+    if (details.message) return details.message;
+  }
+  return `Request failed with ${status}`;
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {

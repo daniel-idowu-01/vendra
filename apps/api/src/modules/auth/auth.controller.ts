@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Post, UseGuards } from "@nestjs/common";
 import { AuthService } from "./auth.service";
 import { LoginDto, RefreshTokenDto, SignupDto } from "./dto/auth.dto";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -30,5 +30,17 @@ export class AuthController {
     @Body("phone") phone: string
   ) {
     return this.auth.linkWhatsApp(user.sub, user.organizationId, phone);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get("whatsapp-link")
+  getWhatsAppLink(@CurrentUser() user: AuthenticatedUser) {
+    return this.auth.getWhatsAppLink(user.sub);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete("whatsapp-link")
+  unlinkWhatsApp(@CurrentUser() user: AuthenticatedUser) {
+    return this.auth.unlinkWhatsApp(user.sub);
   }
 }

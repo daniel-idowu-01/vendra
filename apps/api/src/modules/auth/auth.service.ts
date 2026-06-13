@@ -142,6 +142,47 @@ export class AuthService {
     }
   }
 
+  async getWhatsAppLink(userId: string) {
+    try {
+      const identity = await this.prisma.whatsAppIdentity.findFirst({
+        where: { userId },
+        orderBy: { createdAt: "desc" }
+      });
+
+      return {
+        linked: Boolean(identity),
+        phone: identity?.phone ?? null
+      };
+    } catch (error) {
+      Logger.error("[AuthService.getWhatsAppLink] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to retrieve WhatsApp link.");
+    }
+  }
+
+  async unlinkWhatsApp(userId: string) {
+    try {
+      const identity = await this.prisma.whatsAppIdentity.findFirst({
+        where: { userId },
+        orderBy: { createdAt: "desc" }
+      });
+
+      if (!identity) return { linked: false, phone: null };
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.whatsAppIdentity.deleteMany({ where: { userId } });
+        await tx.user.updateMany({
+          where: { id: userId, phone: identity.phone },
+          data: { phone: null }
+        });
+      });
+
+      return { linked: false, phone: null };
+    } catch (error) {
+      Logger.error("[AuthService.unlinkWhatsApp] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to unlink WhatsApp number.");
+    }
+  }
+
   private issueTokens(userId: string, email: string, organizationId?: string) {
     const payload = { sub: userId, email, organizationId };
     return {
