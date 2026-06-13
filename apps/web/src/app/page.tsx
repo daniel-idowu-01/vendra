@@ -16,6 +16,7 @@ import {
   Store,
   TrendingUp
 } from "lucide-react";
+import { Typewriter } from "@/components/landing/typewriter";
 
 const features = [
   {
@@ -111,8 +112,9 @@ export default function LandingPage() {
               WhatsApp-first business OS
             </p>
             <h1 className="mt-6 text-4xl font-semibold tracking-[-0.04em] text-foreground sm:text-5xl lg:text-6xl">
-              Run your business from{" "}
-              <span className="text-accent">WhatsApp</span>
+              Run your business from
+              <br />
+              <Typewriter />
             </h1>
             <p className="mx-auto mt-6 max-w-xl text-base leading-7 text-muted-foreground sm:text-lg sm:leading-8">
               Vendra is the operating system for African SMEs. Manage inventory,
