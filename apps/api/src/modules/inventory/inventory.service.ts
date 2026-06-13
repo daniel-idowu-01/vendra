@@ -70,6 +70,40 @@ export class InventoryService {
     }
   }
 
+  async deleteZeroStockProducts(organizationId: string) {
+    try {
+      const products = await this.prisma.product.findMany({
+        where: { organizationId, isActive: true },
+        include: { batches: true }
+      });
+      const zeroStockProducts = products.filter((product) => {
+        const quantity = product.batches.reduce((sum, batch) => sum + batch.quantity, 0);
+        return quantity <= 0;
+      });
+
+      if (zeroStockProducts.length === 0) {
+        return { count: 0, products: [] as Array<{ id: string; name: string }> };
+      }
+
+      await this.prisma.product.updateMany({
+        where: {
+          organizationId,
+          id: { in: zeroStockProducts.map((product) => product.id) }
+        },
+        data: { isActive: false }
+      });
+
+      return {
+        count: zeroStockProducts.length,
+        products: zeroStockProducts.map((product) => ({ id: product.id, name: product.name }))
+      };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      Logger.error("[InventoryService.deleteZeroStockProducts] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to delete zero-stock products.");
+    }
+  }
+
   async recordTransaction(organizationId: string, dto: StockMutationDto) {
     try {
       if (dto.quantity === 0) throw new BadRequestException("Quantity cannot be zero");

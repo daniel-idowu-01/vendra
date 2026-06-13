@@ -144,6 +144,20 @@ export class ActionExecutorService {
           );
         }
 
+        case "deleteZeroStockProducts": {
+          const result = await this.inventory.deleteZeroStockProducts(organizationId);
+          if (result.count === 0) {
+            return "No active products with 0 quantity were found.";
+          }
+
+          const names = result.products
+            .slice(0, 10)
+            .map((product) => `• ${product.name}`)
+            .join("\n");
+          const extra = result.count > 10 ? `\n...and ${result.count - 10} more.` : "";
+          return `Deleted ${result.count} product${result.count === 1 ? "" : "s"} with 0 quantity:\n${names}${extra}`;
+        }
+
         case "recordDebt": {
           const customerName = this.requireString(parameters, ["customerName", "name"], "customer name");
           const amount = this.requireNumber(parameters, ["amount"]) ?? 0;
