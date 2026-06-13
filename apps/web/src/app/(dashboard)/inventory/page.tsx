@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Barcode, Plus, Search, Loader2 } from "lucide-react";
 import { useProducts, useCreateProduct } from "@/lib/hooks/use-inventory";
+import { formatCurrency } from "@/lib/format";
 
 export default function InventoryPage() {
   const [page, setPage] = useState(1);
@@ -109,7 +110,7 @@ export default function InventoryPage() {
                   </p>
                 </div>
                 <p className="text-lg font-semibold">
-                  \u20A6{product.sellingPrice.toLocaleString()}
+                  {formatCurrency(product.sellingPrice)}
                 </p>
               </div>
             </Card>

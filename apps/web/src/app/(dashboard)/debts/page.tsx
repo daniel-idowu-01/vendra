@@ -7,6 +7,7 @@ import { BellRing, HandCoins, Loader2 } from "lucide-react";
 import { useDebts } from "@/lib/hooks/use-debts-list";
 import { useDebtSummary } from "@/lib/hooks/use-dashboard";
 import { useRecordPayment, useSendReminder } from "@/lib/hooks/use-debts";
+import { formatCurrency } from "@/lib/format";
 
 export default function DebtsPage() {
   const { data: debts, isLoading } = useDebts();
@@ -50,7 +51,7 @@ export default function DebtsPage() {
       <Card>
         <p className="text-sm text-muted-foreground">Outstanding</p>
         <p className="mt-2 text-3xl font-semibold">
-          {isLoading ? "..." : `\u20A6${outstanding.toLocaleString()}`}
+          {isLoading ? "..." : formatCurrency(outstanding)}
         </p>
       </Card>
 
@@ -73,7 +74,7 @@ export default function DebtsPage() {
                 <div>
                   <p className="font-medium">{debt.customer.name}</p>
                   <p className="text-sm text-muted-foreground">
-                    \u20A6{Number(debt.outstanding).toLocaleString()} outstanding
+                    {formatCurrency(debt.outstanding)} outstanding
                     {debt.dueDate ? ` · Due ${new Date(debt.dueDate).toLocaleDateString()}` : ""}
                   </p>
                 </div>

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Plus, Loader2, Send } from "lucide-react";
 import { useInvoices, useCreateInvoice } from "@/lib/hooks/use-invoices";
+import { formatCurrency } from "@/lib/format";
 
 export default function InvoicesPage() {
   const { data: invoices, isLoading } = useInvoices();
@@ -85,7 +86,7 @@ export default function InvoicesPage() {
                 </div>
                 <div className="text-right">
                   <p className="text-lg font-semibold">
-                    \u20A6{Number(inv.totalAmount).toLocaleString()}
+                    {formatCurrency(inv.totalAmount)}
                   </p>
                   <span className={`text-xs ${
                     inv.status === "PAID" ? "text-green-400" : "text-yellow-400"

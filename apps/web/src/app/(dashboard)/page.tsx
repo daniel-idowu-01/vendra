@@ -10,6 +10,7 @@ import { useDashboard, useDebtSummary, useLowStock } from "@/lib/hooks/use-dashb
 import { useRecordTransaction } from "@/lib/hooks/use-inventory";
 import { useAuthStore } from "@/lib/auth-store";
 import { apiFetch } from "@/lib/api-client";
+import { formatCurrency } from "@/lib/format";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -151,13 +152,13 @@ export default function DashboardPage() {
         <Card className="animate-fade-up">
           <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Today&rsquo;s sales</p>
           <p className="mt-3 text-3xl font-semibold">
-            {dashLoading ? "..." : `\u20A6${totalSales.toLocaleString()}`}
+            {dashLoading ? "..." : formatCurrency(totalSales)}
           </p>
         </Card>
         <Card className="animate-fade-up">
           <p className="text-sm uppercase tracking-[0.22em] text-muted-foreground">Open debt</p>
           <p className="mt-3 text-3xl font-semibold">
-            {dashLoading ? "..." : `\u20A6${openDebt.toLocaleString()}`}
+            {dashLoading ? "..." : formatCurrency(openDebt)}
           </p>
         </Card>
       </div>
