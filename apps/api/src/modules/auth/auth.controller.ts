@@ -2,7 +2,7 @@ import { Body, Controller, Post, UseGuards } from "@nestjs/common";
 import { AuthService } from "./auth.service";
 import { LoginDto, RefreshTokenDto, SignupDto } from "./dto/auth.dto";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
-import { CurrentUser } from "../../common/decorators/current-user.decorator";
+import { AuthenticatedUser, CurrentUser } from "../../common/decorators/current-user.decorator";
 
 @Controller({ path: "auth", version: "1" })
 export class AuthController {
@@ -26,9 +26,9 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post("link-whatsapp")
   linkWhatsApp(
-    @CurrentUser() user: { sub: string; organizationId?: string },
+    @CurrentUser() user: AuthenticatedUser,
     @Body("phone") phone: string
   ) {
-    return this.auth.linkWhatsApp(user.sub, user.organizationId ?? "", phone);
+    return this.auth.linkWhatsApp(user.sub, user.organizationId, phone);
   }
 }
