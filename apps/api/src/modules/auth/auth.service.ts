@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, HttpException, Injectable, Inte
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import * as argon2 from "argon2";
+import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuthRepository } from "./repositories/auth.repository";
 import { LoginDto, SignupDto } from "./dto/auth.dto";
@@ -87,18 +88,99 @@ export class AuthService {
     }
   }
 
-  async linkWhatsApp(userId: string, organizationId: string, phone: string) {
-    const existing = await this.prisma.whatsAppIdentity.findUnique({ where: { phone } });
-    if (existing && existing.userId !== userId) {
-      throw new ConflictException("This phone number is already linked to another account");
-    }
-    if (existing && existing.userId === userId) return { linked: true, phone };
+  async linkWhatsApp(userId: string, organizationId: string | undefined, phone: string) {
+    try {
+      const normalizedPhone = phone?.trim();
+      if (!normalizedPhone) {
+        throw new BadRequestException("Phone number is required");
+      }
 
-    await this.prisma.whatsAppIdentity.create({
-      data: { phone, userId, organizationId }
-    });
-    await this.prisma.user.update({ where: { id: userId }, data: { phone } });
-    return { linked: true, phone };
+      let resolvedOrganizationId = organizationId;
+      if (!resolvedOrganizationId) {
+        const membership = await this.authRepo.findFirstActiveMembership(userId);
+        resolvedOrganizationId = membership?.organizationId;
+      }
+
+      if (!resolvedOrganizationId) {
+        throw new BadRequestException("No active organization found for this user");
+      }
+
+      const existingForUser = await this.prisma.whatsAppIdentity.findFirst({
+        where: { userId }
+      });
+      if (existingForUser && existingForUser.phone !== normalizedPhone) {
+        throw new ConflictException(
+          "You already have a WhatsApp number linked. Unlink it before linking another number."
+        );
+      }
+      if (existingForUser && existingForUser.phone === normalizedPhone) {
+        return { linked: true, phone: normalizedPhone };
+      }
+
+      const existing = await this.prisma.whatsAppIdentity.findUnique({ where: { phone: normalizedPhone } });
+      if (existing && existing.userId !== userId) {
+        throw new ConflictException("This phone number is already linked to another account");
+      }
+
+      await this.prisma.whatsAppIdentity.create({
+        data: { phone: normalizedPhone, userId, organizationId: resolvedOrganizationId }
+      });
+      await this.prisma.user.update({ where: { id: userId }, data: { phone: normalizedPhone } });
+      return { linked: true, phone: normalizedPhone };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        if (error.code === "P2002") {
+          throw new ConflictException("This phone number is already linked to another account");
+        }
+        if (error.code === "P2003") {
+          throw new BadRequestException("Invalid user or organization for WhatsApp linking");
+        }
+      }
+      Logger.error("[AuthService.linkWhatsApp] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to link WhatsApp number. Please try again.");
+    }
+  }
+
+  async getWhatsAppLink(userId: string) {
+    try {
+      const identity = await this.prisma.whatsAppIdentity.findFirst({
+        where: { userId },
+        orderBy: { createdAt: "desc" }
+      });
+
+      return {
+        linked: Boolean(identity),
+        phone: identity?.phone ?? null
+      };
+    } catch (error) {
+      Logger.error("[AuthService.getWhatsAppLink] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to retrieve WhatsApp link.");
+    }
+  }
+
+  async unlinkWhatsApp(userId: string) {
+    try {
+      const identity = await this.prisma.whatsAppIdentity.findFirst({
+        where: { userId },
+        orderBy: { createdAt: "desc" }
+      });
+
+      if (!identity) return { linked: false, phone: null };
+
+      await this.prisma.$transaction(async (tx) => {
+        await tx.whatsAppIdentity.deleteMany({ where: { userId } });
+        await tx.user.updateMany({
+          where: { id: userId, phone: identity.phone },
+          data: { phone: null }
+        });
+      });
+
+      return { linked: false, phone: null };
+    } catch (error) {
+      Logger.error("[AuthService.unlinkWhatsApp] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to unlink WhatsApp number.");
+    }
   }
 
   private issueTokens(userId: string, email: string, organizationId?: string) {
@@ -106,7 +188,7 @@ export class AuthService {
     return {
       accessToken: this.jwt.sign(payload, {
         secret: this.config.getOrThrow<string>("JWT_ACCESS_SECRET"),
-        expiresIn: "15m"
+        expiresIn: "1h"
       }),
       refreshToken: this.jwt.sign(payload, {
         secret: this.config.getOrThrow<string>("JWT_REFRESH_SECRET"),

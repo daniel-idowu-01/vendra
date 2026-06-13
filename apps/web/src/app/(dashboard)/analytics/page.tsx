@@ -2,6 +2,7 @@
 
 import { Card } from "@/components/ui/card";
 import { useAnalytics } from "@/lib/hooks/use-analytics";
+import { formatCurrency } from "@/lib/format";
 
 export default function AnalyticsPage() {
   const { data, isLoading } = useAnalytics();
@@ -16,13 +17,13 @@ export default function AnalyticsPage() {
         <Card>
           <p className="text-sm text-muted-foreground">Today&rsquo;s sales</p>
           <p className="mt-2 text-2xl font-semibold">
-            {isLoading ? "..." : `\u20A6${(data?.todaySales ?? 0).toLocaleString()}`}
+            {isLoading ? "..." : formatCurrency(data?.todaySales)}
           </p>
         </Card>
         <Card>
           <p className="text-sm text-muted-foreground">Open debt</p>
           <p className="mt-2 text-2xl font-semibold">
-            {isLoading ? "..." : `\u20A6${(data?.openDebt ?? 0).toLocaleString()}`}
+            {isLoading ? "..." : formatCurrency(data?.openDebt)}
           </p>
         </Card>
       </div>

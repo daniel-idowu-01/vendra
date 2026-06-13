@@ -20,10 +20,18 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException("Missing bearer token");
     }
 
-    request.user = this.jwt.verify(token, {
-      secret: this.config.getOrThrow<string>("JWT_ACCESS_SECRET")
-    });
-    this.logger.debug("JWT verification passed");
-    return true;
+    try {
+      request.user = this.jwt.verify(token, {
+        secret: this.config.getOrThrow<string>("JWT_ACCESS_SECRET")
+      });
+      this.logger.debug("JWT verification passed");
+      return true;
+    } catch (error) {
+      const message = error instanceof Error && error.name === "TokenExpiredError"
+        ? "Session expired"
+        : "Invalid bearer token";
+      this.logger.warn(`Blocked request: ${message}`);
+      throw new UnauthorizedException(message);
+    }
   }
 }
