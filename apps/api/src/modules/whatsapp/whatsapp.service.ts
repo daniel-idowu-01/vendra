@@ -86,6 +86,33 @@ export class WhatsAppService {
     }
   }
 
+  async downloadMedia(mediaId: string): Promise<Buffer | null> {
+    const accessToken = this.config.get<string>("META_WHATSAPP_ACCESS_TOKEN");
+    if (!accessToken) {
+      Logger.warn("[WhatsAppService.downloadMedia] WhatsApp access token is not configured");
+      return null;
+    }
+
+    const metadataResponse = await fetch(`https://graph.facebook.com/v21.0/${mediaId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const metadata = await metadataResponse.json();
+    if (!metadataResponse.ok || !metadata?.url) {
+      Logger.error("[WhatsAppService.downloadMedia] Meta media metadata error:", metadata);
+      return null;
+    }
+
+    const mediaResponse = await fetch(metadata.url, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!mediaResponse.ok) {
+      Logger.error("[WhatsAppService.downloadMedia] Meta media download failed:", await mediaResponse.text());
+      return null;
+    }
+
+    return Buffer.from(await mediaResponse.arrayBuffer());
+  }
+
   private deriveEventId(payload: unknown) {
     const text = JSON.stringify(payload);
     let hash = 0;

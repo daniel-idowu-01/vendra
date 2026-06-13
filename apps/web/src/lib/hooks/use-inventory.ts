@@ -52,6 +52,35 @@ export function useCreateProduct() {
   });
 }
 
+export type ProductImportResult = {
+  created: number;
+  updated: number;
+  skipped: number;
+  totalProcessed: number;
+  filename: string | null;
+  errors: string[];
+};
+
+export function useImportProducts() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return apiFetch<ProductImportResult>("/inventory/products/import", {
+        method: "POST",
+        body: formData
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["low-stock"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+  });
+}
+
 type StockLevel = {
   productId: string;
   total: number;
