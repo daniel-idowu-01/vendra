@@ -37,11 +37,11 @@ export default function LoginPage() {
           phone: phone || undefined
         });
         setSession(result);
-        router.push("/");
+        router.push("/dashboard");
       } else {
         const result = await login.mutateAsync({ email, password });
         setSession(result);
-        router.push("/");
+        router.push("/dashboard");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");

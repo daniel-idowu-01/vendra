@@ -42,6 +42,14 @@ export class InventoryService {
     }
   }
 
+  async listBranches(organizationId: string) {
+    return this.prisma.branch.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true }
+    });
+  }
+
   async createProduct(organizationId: string, dto: CreateProductDto) {
     try {
       const name = dto.name?.trim();
@@ -284,6 +292,12 @@ export class InventoryService {
         ? -Math.abs(dto.quantity)
         : Math.abs(dto.quantity);
 
+      const product = await this.prisma.product.findUnique({
+        where: { id: dto.productId },
+        select: { name: true, sellingPrice: true }
+      });
+      if (!product) throw new BadRequestException("Product not found.");
+
       return await this.prisma.$transaction(async (tx) => {
         const transaction = await this.inventoryRepo.createTransaction({
           organizationId,
@@ -320,6 +334,24 @@ export class InventoryService {
           action: dto.type,
           metadata: { transactionId: transaction.id, quantity: signedQuantity }
         }, tx);
+
+        if (dto.type === "SALE") {
+          await tx.payment.create({
+            data: {
+              organizationId,
+              amount: product.sellingPrice.mul(dto.quantity),
+              currency: "NGN",
+              provider: "MANUAL",
+              paidAt: new Date(),
+              metadata: {
+                transactionId: transaction.id,
+                productId: dto.productId,
+                productName: product.name,
+                quantity: dto.quantity
+              }
+            }
+          });
+        }
 
         return transaction;
       });

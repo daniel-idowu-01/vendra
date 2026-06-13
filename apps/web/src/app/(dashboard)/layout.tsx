@@ -5,7 +5,7 @@ import { LogoutButton } from "@/components/auth/logout-button";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 const navItems = [
-  { href: "/" as const, label: "Dashboard" },
+  { href: "/dashboard" as const, label: "Dashboard" },
   { href: "/inventory" as const, label: "Stock" },
   { href: "/invoices" as const, label: "Invoices" },
   { href: "/debts" as const, label: "Debts" },

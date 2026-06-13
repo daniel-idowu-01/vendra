@@ -4,7 +4,7 @@ import Link from "next/link";
 import { BarChart3, Boxes, FileText, HandCoins, MessageCircle } from "lucide-react";
 
 const items = [
-  { href: "/" as const, label: "Home", icon: MessageCircle },
+  { href: "/dashboard" as const, label: "Home", icon: MessageCircle },
   { href: "/inventory" as const, label: "Stock", icon: Boxes },
   { href: "/invoices" as const, label: "Invoice", icon: FileText },
   { href: "/debts" as const, label: "Debts", icon: HandCoins },

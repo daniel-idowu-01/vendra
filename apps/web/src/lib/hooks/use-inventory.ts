@@ -11,6 +11,7 @@ export type Product = {
   costPrice: number;
   sellingPrice: number;
   lowStockLevel: number;
+  quantity: number;
 };
 
 type PaginatedProducts = {
@@ -96,6 +97,21 @@ export function useStockLevel(productId: string) {
     queryFn: () =>
       apiFetch<StockLevel>(apiPath(`/inventory/products/${productId}/stock`)),
     enabled: !!organizationId && !!productId
+  });
+}
+
+type Branch = {
+  id: string;
+  name: string;
+};
+
+export function useBranches() {
+  const organizationId = useAuthStore((s) => s.organizationId);
+
+  return useQuery({
+    queryKey: ["branches", organizationId],
+    queryFn: () => apiFetch<Branch[]>(apiPath("/inventory/branches")),
+    enabled: !!organizationId
   });
 }
 
