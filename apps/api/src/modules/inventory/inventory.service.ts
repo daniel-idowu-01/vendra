@@ -1,9 +1,17 @@
 import { BadRequestException, ConflictException, HttpException, Injectable, InternalServerErrorException, Logger } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
+import * as XLSX from "xlsx";
 import { PrismaService } from "../../prisma/prisma.service";
 import { InventoryRepository } from "./repositories/inventory.repository";
 import { PaginationDto } from "../../common/pagination/pagination.dto";
 import { CreateProductDto, StockMutationDto } from "./dto/inventory.dto";
+
+type ImportedProductRow = {
+  name: string;
+  sellingPrice: number;
+  initialQuantity: number;
+  rowNumber: number;
+};
 
 @Injectable()
 export class InventoryService {
@@ -158,6 +166,117 @@ export class InventoryService {
     }
   }
 
+  async importProductsFromSpreadsheet(
+    organizationId: string,
+    file: { buffer: Buffer; originalname?: string; mimetype?: string }
+  ) {
+    try {
+      if (!file?.buffer?.length) {
+        throw new BadRequestException("Spreadsheet file is required.");
+      }
+
+      const rows = this.parseProductSpreadsheet(file.buffer);
+      if (rows.length === 0) {
+        throw new BadRequestException("No valid products found. Use columns: product name, price, quantity.");
+      }
+
+      const branch = await this.prisma.branch.findFirst({
+        where: { organizationId },
+        orderBy: { createdAt: "asc" }
+      });
+      if (!branch) throw new BadRequestException("Cannot import stock because no branch exists.");
+
+      const result = {
+        created: 0,
+        updated: 0,
+        skipped: 0,
+        errors: [] as string[]
+      };
+
+      for (const row of rows) {
+        try {
+          const existing = await this.prisma.product.findFirst({
+            where: {
+              organizationId,
+              name: { equals: row.name, mode: "insensitive" },
+              isActive: true
+            }
+          });
+
+          if (existing) {
+            await this.prisma.$transaction(async (tx) => {
+              const product = await tx.product.update({
+                where: { id: existing.id },
+                data: { sellingPrice: row.sellingPrice }
+              });
+
+              if (row.initialQuantity <= 0) return;
+
+              const transaction = await this.inventoryRepo.createTransaction({
+                organizationId,
+                productId: product.id,
+                branchId: branch.id,
+                type: "STOCK_IN",
+                quantity: row.initialQuantity,
+                note: "Spreadsheet import"
+              }, tx);
+
+              const existingBatch = await this.inventoryRepo.findBatch(
+                organizationId,
+                product.id,
+                branch.id,
+                tx
+              );
+              if (existingBatch) {
+                await this.inventoryRepo.updateBatch(
+                  existingBatch.id,
+                  { quantity: { increment: row.initialQuantity } },
+                  tx
+                );
+              } else {
+                await this.inventoryRepo.createBatch({
+                  organizationId,
+                  productId: product.id,
+                  branchId: branch.id,
+                  quantity: row.initialQuantity
+                }, tx);
+              }
+
+              await this.inventoryRepo.createAuditLog({
+                organizationId,
+                productId: product.id,
+                action: "STOCK_IN",
+                metadata: { transactionId: transaction.id, quantity: row.initialQuantity, source: "spreadsheet_import" }
+              }, tx);
+            });
+            result.updated += 1;
+          } else {
+            await this.createProduct(organizationId, {
+              name: row.name,
+              sellingPrice: row.sellingPrice,
+              initialQuantity: row.initialQuantity
+            });
+            result.created += 1;
+          }
+        } catch (error) {
+          result.skipped += 1;
+          result.errors.push(`Row ${row.rowNumber}: failed to import "${row.name}"`);
+          Logger.warn(`[InventoryService.importProductsFromSpreadsheet] Row ${row.rowNumber} failed`, error as Error);
+        }
+      }
+
+      return {
+        ...result,
+        totalProcessed: result.created + result.updated,
+        filename: file.originalname ?? null
+      };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      Logger.error("[InventoryService.importProductsFromSpreadsheet] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to import products.");
+    }
+  }
+
   async recordTransaction(organizationId: string, dto: StockMutationDto) {
     try {
       if (dto.quantity === 0) throw new BadRequestException("Quantity cannot be zero");
@@ -227,6 +346,65 @@ export class InventoryService {
       Logger.error("[InventoryService.lowStock] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve low stock alerts.");
     }
+  }
+
+  private parseProductSpreadsheet(buffer: Buffer): ImportedProductRow[] {
+    const workbook = XLSX.read(buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) return [];
+
+    const worksheet = workbook.Sheets[sheetName];
+    const table = XLSX.utils.sheet_to_json<Array<string | number | null>>(worksheet, {
+      header: 1,
+      raw: false,
+      blankrows: false
+    });
+    const rows = table.filter((row) => row.some((cell) => String(cell ?? "").trim().length > 0));
+    if (rows.length === 0) return [];
+
+    const header = rows[0].map((cell) => this.normalizeHeader(cell));
+    const hasHeader = header.some((cell) => ["name", "product", "productname", "item", "itemname"].includes(cell));
+    const dataRows = hasHeader ? rows.slice(1) : rows;
+    const indexes = hasHeader
+      ? {
+          name: this.findHeaderIndex(header, ["name", "product", "productname", "item", "itemname"]),
+          price: this.findHeaderIndex(header, ["price", "sellingprice", "unitprice", "amount"]),
+          quantity: this.findHeaderIndex(header, ["quantity", "qty", "stock", "stockcount", "initialquantity"])
+        }
+      : { name: 0, price: 1, quantity: 2 };
+
+    if (indexes.name < 0) {
+      throw new BadRequestException("Could not find a product name column.");
+    }
+
+    const parsed: ImportedProductRow[] = [];
+    dataRows.forEach((row, index) => {
+      const rowNumber = hasHeader ? index + 2 : index + 1;
+      const name = String(row[indexes.name] ?? "").trim();
+      const sellingPrice = this.parseImportNumber(row[indexes.price]);
+      const initialQuantity = Math.floor(this.parseImportNumber(row[indexes.quantity]));
+
+      if (!name) return;
+      if (sellingPrice < 0 || initialQuantity < 0) return;
+
+      parsed.push({ name, sellingPrice, initialQuantity, rowNumber });
+    });
+
+    return parsed;
+  }
+
+  private normalizeHeader(value: unknown) {
+    return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  private findHeaderIndex(headers: string[], candidates: string[]) {
+    return headers.findIndex((header) => candidates.includes(header));
+  }
+
+  private parseImportNumber(value: unknown) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    const parsed = parseFloat(String(value ?? "").replace(/[^\d.-]/g, ""));
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 }
 

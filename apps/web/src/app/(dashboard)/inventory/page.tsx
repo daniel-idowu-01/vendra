@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Barcode, Plus, Search, Loader2 } from "lucide-react";
-import { useProducts, useCreateProduct } from "@/lib/hooks/use-inventory";
+import { Barcode, Plus, Search, Loader2, Upload } from "lucide-react";
+import { ProductImportResult, useProducts, useCreateProduct, useImportProducts } from "@/lib/hooks/use-inventory";
 import { formatCurrency } from "@/lib/format";
 
 export default function InventoryPage() {
@@ -16,6 +16,11 @@ export default function InventoryPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPrice, setNewPrice] = useState("");
+  const [newQuantity, setNewQuantity] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importResult, setImportResult] = useState<ProductImportResult | null>(null);
+  const [importError, setImportError] = useState("");
+  const importProducts = useImportProducts();
 
   const products = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -31,11 +36,26 @@ export default function InventoryPage() {
     if (!newName) return;
     await createProduct.mutateAsync({
       name: newName,
-      sellingPrice: Number(newPrice) || 0
+      sellingPrice: Number(newPrice) || 0,
+      initialQuantity: Number(newQuantity) || 0
     });
     setShowAdd(false);
     setNewName("");
     setNewPrice("");
+    setNewQuantity("");
+  };
+
+  const handleImport = async () => {
+    if (!importFile) return;
+    setImportError("");
+    setImportResult(null);
+    try {
+      const result = await importProducts.mutateAsync(importFile);
+      setImportResult(result);
+      setImportFile(null);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Failed to import products");
+    }
   };
 
   return (
@@ -68,11 +88,43 @@ export default function InventoryPage() {
         </Button>
       </div>
 
+      <Card className="space-y-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold">Import products</p>
+            <p className="mt-1 text-sm text-muted-foreground">Upload CSV, XLS, or XLSX with product name, price, and quantity columns.</p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              className="input-surface max-w-full sm:w-72"
+              type="file"
+              accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={(event) => {
+                setImportFile(event.target.files?.[0] ?? null);
+                setImportResult(null);
+                setImportError("");
+              }}
+            />
+            <Button onClick={handleImport} disabled={!importFile || importProducts.isPending}>
+              {importProducts.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              Import
+            </Button>
+          </div>
+        </div>
+        {importResult && (
+          <p className="text-sm text-green-500">
+            Imported {importResult.totalProcessed} products: {importResult.created} created, {importResult.updated} updated, {importResult.skipped} skipped.
+          </p>
+        )}
+        {importError && <p className="text-sm text-red-400">{importError}</p>}
+      </Card>
+
       {showAdd && (
         <Card className="space-y-3">
           <p className="text-sm font-semibold">New product</p>
           <input className="input-surface w-full" placeholder="Product name" value={newName} onChange={(e) => setNewName(e.target.value)} />
           <input className="input-surface w-full" placeholder="Selling price" type="number" value={newPrice} onChange={(e) => setNewPrice(e.target.value)} />
+          <input className="input-surface w-full" placeholder="Opening quantity" type="number" value={newQuantity} onChange={(e) => setNewQuantity(e.target.value)} />
           <div className="flex gap-2">
             <Button onClick={handleAdd} disabled={createProduct.isPending} className="flex-1">
               {createProduct.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

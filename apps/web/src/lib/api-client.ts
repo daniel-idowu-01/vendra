@@ -55,9 +55,9 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 
 async function fetchWithAuth<T>(path: string, init: RequestInit, allowRefresh: boolean): Promise<T> {
   const { accessToken, organizationId } = useAuthStore.getState();
-  const headers: Record<string, string> = {
-    "content-type": "application/json"
-  };
+  const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+  const headers: Record<string, string> = {};
+  if (!isFormData) headers["content-type"] = "application/json";
   if (accessToken) headers.authorization = `Bearer ${accessToken}`;
   if (organizationId) headers["x-organization-id"] = organizationId;
 

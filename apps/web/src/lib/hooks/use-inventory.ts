@@ -45,9 +45,39 @@ export function useCreateProduct() {
       costPrice?: number;
       sellingPrice?: number;
       lowStockLevel?: number;
+      initialQuantity?: number;
     }) => apiFetch<Product>("/inventory/products", { method: "POST", body: JSON.stringify(data) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
+    }
+  });
+}
+
+export type ProductImportResult = {
+  created: number;
+  updated: number;
+  skipped: number;
+  totalProcessed: number;
+  filename: string | null;
+  errors: string[];
+};
+
+export function useImportProducts() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      return apiFetch<ProductImportResult>("/inventory/products/import", {
+        method: "POST",
+        body: formData
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["low-stock"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     }
   });
 }

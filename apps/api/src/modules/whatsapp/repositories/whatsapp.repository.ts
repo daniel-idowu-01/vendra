@@ -75,6 +75,7 @@ export class WhatsAppRepository {
     direction: "INBOUND" | "OUTBOUND";
     providerMsgId?: string;
     text?: string;
+    mediaUrl?: string;
   }) {
     const { organizationId, conversationId, direction, ...rest } = data;
     return this.prisma.message.create({

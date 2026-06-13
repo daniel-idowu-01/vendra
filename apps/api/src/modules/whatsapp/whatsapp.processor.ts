@@ -8,6 +8,7 @@ import { AiService, type ProposedAction, type ToolName } from "../ai/ai.service"
 import { AiRepository } from "../ai/repositories/ai.repository";
 import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 import { WhatsAppService } from "./whatsapp.service";
+import { InventoryService } from "../inventory/inventory.service";
 
 // WhatsAppProcessor
 @Processor("whatsapp-inbound")
@@ -20,6 +21,7 @@ export class WhatsAppProcessor extends WorkerHost {
     private readonly aiRepo: AiRepository,
     private readonly executor: ActionExecutorService,
     private readonly whatsapp: WhatsAppService,
+    private readonly inventory: InventoryService,
     private readonly prisma: PrismaService
   ) {
     super();
@@ -35,7 +37,12 @@ export class WhatsAppProcessor extends WorkerHost {
           entry?: Array<{
             changes?: Array<{
               value?: {
-                messages?: Array<{ id?: string; from?: string; text?: { body?: string } }>;
+                messages?: Array<{
+                  id?: string;
+                  from?: string;
+                  text?: { body?: string };
+                  document?: { id?: string; filename?: string; mime_type?: string; caption?: string };
+                }>;
                 contacts?: Array<{ profile?: { name?: string } }>;
                 metadata?: { phone_number_id?: string };
               };
@@ -47,23 +54,23 @@ export class WhatsAppProcessor extends WorkerHost {
       const msg = change?.messages?.[0];
       const from: string | undefined = msg?.from;
       const rawText: string | undefined = msg?.text?.body;
+      const document = msg?.document;
       const displayName: string | undefined = change?.contacts?.[0]?.profile?.name;
       const phoneNumberId: string | undefined = change?.metadata?.phone_number_id;
 
-      if (!rawText || !from || !phoneNumberId) {
-        this.logger.debug("Skipping inbound webhook: missing text, from, or phoneNumberId");
+      if ((!rawText && !document) || !from || !phoneNumberId) {
+        this.logger.debug("Skipping inbound webhook: missing text/document, from, or phoneNumberId");
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }
 
       // Strip surrounding backticks users sometimes send
-      const text = rawText.replace(/^`+|`+$/g, "").trim();
+      const text = (rawText ?? document?.caption ?? "").replace(/^`+|`+$/g, "").trim();
       if (!text) {
-        await this.whatsappRepo.markWebhookEventProcessed(event.id);
-        return;
+        this.logger.debug(`Inbound document from ${from}: "${document?.filename ?? document?.id}"`);
+      } else {
+        this.logger.debug(`Inbound from ${from}: "${text}"`);
       }
-
-      this.logger.debug(`Inbound from ${from}: "${text}"`);
 
       const identity = await this.prisma.whatsAppIdentity.findUnique({ where: { phone: from } });
       const organization = identity
@@ -86,8 +93,19 @@ export class WhatsAppProcessor extends WorkerHost {
         conversationId: conversation.id,
         direction: "INBOUND",
         providerMsgId: msg?.id,
-        text
+        text: text || document?.filename || "Document",
+        mediaUrl: document?.id
       });
+
+      if (document) {
+        await this.handleDocumentImport(
+          organization.id,
+          from,
+          document
+        );
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        return;
+      }
 
       const pending = await this.aiRepo.findLatestPendingActionForConversation(
         organization.id,
@@ -144,6 +162,52 @@ export class WhatsAppProcessor extends WorkerHost {
   }
   // Returns true if the message was consumed by a pending action, false if the
   // caller should treat it as a fresh intent.
+
+  private async handleDocumentImport(
+    organizationId: string,
+    from: string,
+    document: { id?: string; filename?: string; mime_type?: string; caption?: string }
+  ) {
+    const filename = document.filename ?? "spreadsheet";
+    const isSpreadsheet =
+      /\.(csv|xls|xlsx)$/i.test(filename) ||
+      [
+        "text/csv",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      ].includes(document.mime_type ?? "");
+
+    if (!document.id || !isSpreadsheet) {
+      await this.reply(
+        organizationId,
+        from,
+        "Please send a CSV, XLS, or XLSX spreadsheet with columns for product name, price, and quantity."
+      );
+      return;
+    }
+
+    const buffer = await this.whatsapp.downloadMedia(document.id);
+    if (!buffer) {
+      await this.reply(organizationId, from, "I could not download that spreadsheet. Please try sending it again.");
+      return;
+    }
+
+    const result = await this.inventory.importProductsFromSpreadsheet(organizationId, {
+      buffer,
+      originalname: filename,
+      mimetype: document.mime_type
+    });
+
+    const warning = result.skipped > 0
+      ? `\nSkipped: ${result.skipped}${result.errors.length ? `\n${result.errors.slice(0, 3).join("\n")}` : ""}`
+      : "";
+
+    await this.reply(
+      organizationId,
+      from,
+      `Imported products from ${filename}.\nCreated: ${result.created}\nUpdated: ${result.updated}\nTotal saved: ${result.totalProcessed}${warning}`
+    );
+  }
 
   private async handlePendingAction(
     organizationId: string,
