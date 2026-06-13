@@ -1,6 +1,15 @@
 import { useAuthStore } from "./auth-store";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const LOGIN_PATH = "/login";
+
+type SessionResponse = {
+  accessToken: string;
+  refreshToken?: string;
+  organizationId?: string;
+};
+
+let refreshPromise: Promise<boolean> | null = null;
 
 export class ApiError extends Error {
   constructor(
@@ -41,6 +50,10 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return fetchWithAuth<T>(path, init, true);
+}
+
+async function fetchWithAuth<T>(path: string, init: RequestInit, allowRefresh: boolean): Promise<T> {
   const { accessToken, organizationId } = useAuthStore.getState();
   const headers: Record<string, string> = {
     "content-type": "application/json"
@@ -53,7 +66,52 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     headers: { ...headers, ...(init.headers as Record<string, string> | undefined) }
   });
 
+  if (response.status === 401 && allowRefresh && path !== "/auth/refresh") {
+    const refreshed = await refreshSession();
+    if (refreshed) {
+      return fetchWithAuth<T>(path, init, false);
+    }
+    redirectToLogin();
+  }
+
   return handleResponse<T>(response);
+}
+
+async function refreshSession() {
+  if (!refreshPromise) {
+    refreshPromise = doRefreshSession().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+async function doRefreshSession() {
+  const { refreshToken } = useAuthStore.getState();
+  if (!refreshToken) return false;
+
+  try {
+    const response = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refreshToken })
+    });
+
+    if (!response.ok) return false;
+
+    const session = (await response.json()) as SessionResponse;
+    useAuthStore.getState().updateAccessToken(session);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function redirectToLogin() {
+  useAuthStore.getState().clear();
+  if (typeof window !== "undefined" && window.location.pathname !== LOGIN_PATH) {
+    window.location.assign(LOGIN_PATH);
+  }
 }
 
 export function apiPath(path: string, params?: Record<string, string | number | undefined>): string {
