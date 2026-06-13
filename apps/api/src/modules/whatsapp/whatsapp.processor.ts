@@ -286,18 +286,37 @@ export class WhatsAppProcessor extends WorkerHost {
   ): Record<string, unknown> | null {
     const hasName = typeof existing.name === "string" && existing.name.length > 0;
     const hasPrice = Number(existing.sellingPrice ?? existing.price) > 0;
-    if (hasName && hasPrice) return null;
+    const hasQuantity = Number(existing.initialQuantity ?? existing.quantity ?? existing.qty) > 0;
+    if (hasName && hasPrice && hasQuantity) return null;
 
-    const priceMatch = text.replace(/,/g, "").match(/[₦#]?\s*(\d+(?:\.\d+)?)/);
+    const normalized = text.replace(/,/g, "");
+    const textWithoutQuantity = normalized.replace(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*\d+\b/gi, "");
+    const priceMatch = textWithoutQuantity.match(/[₦#]?\s*(\d+(?:\.\d+)?)/);
     const price = priceMatch ? parseFloat(priceMatch[1]) : undefined;
+    const quantityMatch = normalized.match(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*(\d+)\b/i);
+    const initialQuantity = quantityMatch ? parseInt(quantityMatch[1], 10) : undefined;
 
     if (!hasName) {
       // Treat whole text as the name (minus any price part)
-      const nameText = text.replace(/[₦#\d,.\s]+$/, "").trim() || text;
-      return { ...existing, name: nameText, sellingPrice: price ?? existing.sellingPrice };
+      const nameText = text
+        .replace(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*\d+\b/gi, "")
+        .replace(/[₦#\d,.\s]+$/, "")
+        .trim() || text;
+      return {
+        ...existing,
+        sourceText: text,
+        name: nameText,
+        sellingPrice: price ?? existing.sellingPrice,
+        initialQuantity: initialQuantity ?? existing.initialQuantity
+      };
     }
-    if (!hasPrice && price) {
-      return { ...existing, sellingPrice: price };
+    if ((!hasPrice && price) || (!hasQuantity && initialQuantity !== undefined)) {
+      return {
+        ...existing,
+        sourceText: text,
+        sellingPrice: price ?? existing.sellingPrice,
+        initialQuantity: initialQuantity ?? existing.initialQuantity
+      };
     }
     return null;
   }

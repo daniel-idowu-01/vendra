@@ -7,6 +7,7 @@ import { AiRepository } from "./repositories/ai.repository";
 export type IntentType =
   | "INVENTORY_QUERY"
   | "INVENTORY_SALE"
+  | "INVENTORY_DELETE"
   | "DEBT_LOOKUP"
   | "DEBT_CREATE"
   | "ANALYTICS_SUMMARY"
@@ -25,6 +26,7 @@ export type ToolName =
   | "lowStockAlert"
   | "listCustomers"
   | "createProduct"
+  | "deleteZeroStockProducts"
   | "createInvoiceDraft"
   | "createCustomer"
   | "recordDebt"
@@ -156,7 +158,11 @@ export class AiService {
     let proposed: ProposedAction;
     let provider = "unknown";
 
-    try {
+    const deterministicAction = this.classifyDeterministic(message);
+    if (deterministicAction) {
+      proposed = deterministicAction;
+      provider = "deterministic";
+    } else try {
       if (this.huggingFaceApiKey) {
         proposed = await this.classifyWithHuggingFace(message, history);
         provider = "huggingface";
@@ -307,11 +313,11 @@ export class AiService {
     const VALID_TOOLS: ToolName[] = [
       "getStockLevel", "recordSale", "listProducts", "listTopDebtors",
       "debtSummary", "todaySales", "lowStockAlert", "listCustomers",
-      "createProduct", "createInvoiceDraft", "createCustomer", "recordDebt", "settleDebt", "unknown"
+      "createProduct", "deleteZeroStockProducts", "createInvoiceDraft", "createCustomer", "recordDebt", "settleDebt", "unknown"
     ];
 
     const WRITE_TOOLS: ToolName[] = [
-      "recordSale", "createProduct", "createCustomer", "recordDebt", "settleDebt", "createInvoiceDraft"
+      "recordSale", "createProduct", "deleteZeroStockProducts", "createCustomer", "recordDebt", "settleDebt", "createInvoiceDraft"
     ];
     if (!VALID_TOOLS.includes(action.toolName)) {
       Logger.warn(`[AiService] LLM returned unknown toolName "${action.toolName}", resetting to unknown`);
@@ -382,9 +388,19 @@ export class AiService {
     const prevUserMsg = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
 
     const isYes = /^(yes|yeah|ok|okay|sure|confirm|proceed|do it|go ahead|correct|right)$/i.test(m);
+    const lastAssistantAskedForConfirmation = /\breply\s+yes\s+to\s+confirm\b/.test(lastAiText);
 
     // If the AI was awaiting confirmation for a specific write tool, honour the YES
-    if (isYes && lastAiText) {
+    if (isYes && lastAssistantAskedForConfirmation) {
+      if (
+        lastAiText.includes("delete") &&
+        (lastAiText.includes("zero") || lastAiText.includes("0 quantity") || lastAiText.includes("no stock"))
+      ) {
+        return this.makeWriteAction("INVENTORY_DELETE", "deleteZeroStockProducts",
+          { sourceText: prevUserMsg, quantity: 0 },
+          "Deleting products with zero stock now..."
+        );
+      }
       if (lastAiText.includes("record") && lastAiText.includes("debt")) {
         return this.makeWriteAction("DEBT_CREATE", "recordDebt",
           { sourceText: prevUserMsg },
@@ -413,6 +429,16 @@ export class AiService {
 
     if (/\b(low.?stock|running out|almost finish|nearly finish)\b/.test(m)) {
       return this.makeReadAction("INVENTORY_QUERY", "lowStockAlert", {}, "Checking for low stock items…");
+    }
+    if (
+      /\b(delete|remove|clear)\b.*\b(products?|items?|inventory)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b/.test(m) ||
+      /\b(delete|remove|clear)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b.*\b(products?|items?|inventory)\b/.test(m)
+    ) {
+      return {
+        intent: "INVENTORY_DELETE", confidence: 0.9, toolName: "deleteZeroStockProducts",
+        parameters: { quantity: 0, sourceText: message }, requiresConfirmation: true,
+        response: "This will delete all active products with 0 quantity. Reply YES to confirm."
+      };
     }
     if (/\b(stock|quantity|how many|remaining|units left)\b/.test(m)) {
       return this.makeReadAction("INVENTORY_QUERY", "getStockLevel", { sourceText: message }, "Let me check the stock level.");
@@ -487,6 +513,47 @@ export class AiService {
       parameters: { sourceText: message }, requiresConfirmation: false,
       response:
         "I'm not sure what you need. You can ask me about products, stock, sales, customers, or debts. What would you like?"
+    };
+  }
+
+  private classifyDeterministic(message: string): ProposedAction | null {
+    const m = message.toLowerCase().trim();
+    const isBareConfirmation = /^(yes|yeah|ok|okay|sure|confirm|proceed|do it|go ahead|correct|right)$/i.test(m);
+    if (isBareConfirmation) {
+      return {
+        intent: "UNKNOWN",
+        confidence: 0.9,
+        toolName: "unknown",
+        parameters: { sourceText: message },
+        requiresConfirmation: false,
+        response: "I don't have anything waiting for confirmation. Please send the full request again."
+      };
+    }
+
+    if (/\b(add|create|new)\b.*\b(products?|items?)\b/.test(m)) {
+      return {
+        intent: "INVENTORY_SALE",
+        confidence: 0.9,
+        toolName: "createProduct",
+        parameters: { sourceText: message },
+        requiresConfirmation: true,
+        response: "Create this product with its opening stock count if provided? Example: White shirt 10000 qty 5. Reply YES to confirm."
+      };
+    }
+
+    const deleteZeroStock =
+      /\b(delete|remove|clear)\b.*\b(products?|items?|inventory)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b/.test(m) ||
+      /\b(delete|remove|clear)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b.*\b(products?|items?|inventory)\b/.test(m);
+
+    if (!deleteZeroStock) return null;
+
+    return {
+      intent: "INVENTORY_DELETE",
+      confidence: 0.95,
+      toolName: "deleteZeroStockProducts",
+      parameters: { quantity: 0, sourceText: message },
+      requiresConfirmation: true,
+      response: "This will delete all active products with 0 quantity. Reply YES to confirm."
     };
   }
 

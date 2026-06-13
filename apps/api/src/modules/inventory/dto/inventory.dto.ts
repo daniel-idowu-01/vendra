@@ -28,6 +28,11 @@ export class CreateProductDto {
   @IsInt()
   @Min(0)
   lowStockLevel?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  initialQuantity?: number;
 }
 
 export class StockMutationDto {
