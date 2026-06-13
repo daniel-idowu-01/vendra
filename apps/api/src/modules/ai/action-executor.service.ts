@@ -9,7 +9,7 @@ import { type ProposedAction } from "./ai.service";
 interface SaleItem {
   name: string;
   quantity: number;
-  unitPrice: number;
+  unitPrice?: number;
 }
 
 @Injectable()
@@ -338,7 +338,18 @@ export class ActionExecutorService {
         if (!product) {
           errors.push(`  - ${item.name}: product not found. Add it with stock count first.`);
           continue;
-        } else if (Number(product.sellingPrice) !== item.unitPrice && item.unitPrice > 0) {
+        }
+
+        const resolvedUnitPrice = item.unitPrice && item.unitPrice > 0
+          ? item.unitPrice
+          : Number(product.sellingPrice);
+
+        if (resolvedUnitPrice <= 0) {
+          errors.push(`  - ${product.name}: no sale price provided and product price is not set.`);
+          continue;
+        }
+
+        if (item.unitPrice && item.unitPrice > 0 && Number(product.sellingPrice) !== item.unitPrice) {
           // Update price only if a new explicit price was provided
           product = await this.prisma.product.update({
             where: { id: product.id },
@@ -363,14 +374,14 @@ export class ActionExecutorService {
           note: `WhatsApp sale`
         });
 
-        const lineTotal = item.quantity * item.unitPrice;
+        const lineTotal = item.quantity * resolvedUnitPrice;
         totalAmount += lineTotal;
         const remaining = available - item.quantity;
         const stockNotice = remaining <= product.lowStockLevel
           ? ` | Low stock: ${remaining.toLocaleString("en-NG")} left`
           : ` | Stock left: ${remaining.toLocaleString("en-NG")}`;
         recordedLines.push(
-          `• ${item.quantity}x ${product.name} @ NGN ${item.unitPrice.toLocaleString("en-NG")} = NGN ${lineTotal.toLocaleString("en-NG")}${stockNotice}`
+          `• ${item.quantity}x ${product.name} @ NGN ${resolvedUnitPrice.toLocaleString("en-NG")} = NGN ${lineTotal.toLocaleString("en-NG")}${stockNotice}`
         );
       } catch (err) {
         Logger.error(`[ActionExecutorService] Failed to record sale item "${item.name}":`, err);
@@ -389,7 +400,7 @@ export class ActionExecutorService {
         provider: "MANUAL",
         amount: totalAmount,
         paidAt: new Date(),
-        metadata: { source: "whatsapp_ai", items: items as any }
+        metadata: { source: "whatsapp_ai", items: recordedLines }
       }
     });
 
@@ -500,12 +511,16 @@ export class ActionExecutorService {
         String(obj.name ?? obj.productName ?? obj.product ?? "").trim();
       const quantity =
         Number(obj.quantity ?? obj.qty ?? obj.count ?? 1);
-      const unitPrice =
-        Number(
-          obj.unitPrice ?? obj.unit_price ?? obj.price ?? obj.sellingPrice ?? 0
-        );
+      const rawUnitPrice = obj.unitPrice ?? obj.unit_price ?? obj.price ?? obj.sellingPrice;
+      const unitPrice = rawUnitPrice === undefined || rawUnitPrice === null || rawUnitPrice === ""
+        ? undefined
+        : Number(rawUnitPrice);
       if (name && quantity > 0) {
-        items.push({ name, quantity, unitPrice });
+        items.push({
+          name,
+          quantity,
+          unitPrice: unitPrice && !isNaN(unitPrice) ? unitPrice : undefined
+        });
       }
     }
     return items;
