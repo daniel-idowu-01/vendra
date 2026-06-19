@@ -1,4 +1,4 @@
-import { HttpException, Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { InferenceClient } from "@huggingface/inference";
@@ -37,11 +37,8 @@ export type ProposedAction = {
   intent: IntentType;
   confidence: number;
   toolName: ToolName;
-  
   parameters: Record<string, unknown>;
-  
   requiresConfirmation: boolean;
-  
   response: string;
 };
 
@@ -66,6 +63,7 @@ WRITE  (requiresConfirmation: true — user MUST confirm before execution)
   createCustomer   → user wants to add a new customer
   recordDebt       → user says someone owes them money
   settleDebt       → user says a customer paid/settled debt
+  deleteZeroStockProducts → user wants to delete all products with 0 stock
   createInvoiceDraft → user wants to generate an invoice
 
 FALLBACK
@@ -79,7 +77,7 @@ For recordSale — extract an "items" array:
   Example: "sold 3 bags for 5000 each" → items: [{"name":"bags","quantity":3,"unitPrice":5000}]
 
 For createProduct — extract:
-  { "name": string, "sellingPrice": number, "unit": string }
+  { "name": string, "sellingPrice": number, "unit": string, "initialQuantity": number }
   If price is missing, set sellingPrice to 0 and ask in response.
 
 For createCustomer — extract:
@@ -87,24 +85,26 @@ For createCustomer — extract:
 
 For recordDebt — extract:
   { "customerName": string, "amount": number }
-  If amount is missing, set amount to 0 and ask in response.
+  If amount is missing, set amount to 0 and ask for it in response.
 
 For settleDebt — extract:
   { "customerName": string, "amount": number | null }
-  If amount is missing, set amount to null (means settle full outstanding).
+  If amount is missing or user says full payment, set amount to null.
+  IMPORTANT: Only set settleAll=true if the user explicitly says ALL debts or everyone.
 
 For getStockLevel — extract:
-  { "productName": string }  (use productName, NOT productId)
+  { "productName": string }
 
 ────────────────────────────────────────────────
 RESPONSE RULES
 ────────────────────────────────────────────────
-- For WRITE tools: response must summarise what you understood and ask the user to confirm.
-  Example: "Got it — record a debt of ₦15,000 for Emeka? Reply YES to confirm."
+- For WRITE tools: response must summarise what you understood and ask user to confirm.
+  Example: "Record a debt of ₦15,000 for Emeka? Reply YES to confirm or NO to cancel."
 - For READ tools: response is a brief acknowledgement, e.g. "Fetching your product list…"
 - Respond in the SAME language the user used (English, Pidgin, Yoruba, Hausa, Igbo).
 - Never make up data; only extract what the user explicitly stated.
 - If confidence < 0.6, use toolName "unknown" and ask the user to clarify.
+- NEVER classify a bare "yes" or "no" — those are handled outside this classifier.
 
 ────────────────────────────────────────────────
 OUTPUT FORMAT  — valid JSON only, no markdown, no code fences
@@ -117,6 +117,26 @@ OUTPUT FORMAT  — valid JSON only, no markdown, no code fences
   "requiresConfirmation": <true|false>,
   "response": "<message to send to user>"
 }`;
+
+const WRITE_TOOLS: ToolName[] = [
+  "recordSale",
+  "createProduct",
+  "deleteZeroStockProducts",
+  "createCustomer",
+  "recordDebt",
+  "settleDebt",
+  "createInvoiceDraft",
+];
+
+const READ_TOOLS: ToolName[] = [
+  "getStockLevel",
+  "listProducts",
+  "lowStockAlert",
+  "listTopDebtors",
+  "debtSummary",
+  "todaySales",
+  "listCustomers",
+];
 
 @Injectable()
 export class AiService {
@@ -132,17 +152,19 @@ export class AiService {
     private readonly config: ConfigService
   ) {
     const geminiKey = this.config.get<string>("GEMINI_API_KEY") ?? "";
-    this.huggingFaceApiKey = this.config.get<string>("HUGGINGFACE_API_KEY") ?? "";
+    this.huggingFaceApiKey =
+      this.config.get<string>("HUGGINGFACE_API_KEY") ?? "";
     this.huggingFaceModel =
-      this.config.get<string>("HUGGINGFACE_MODEL") ?? "meta-llama/Llama-3.1-8B-Instruct:scaleway";
+      this.config.get<string>("HUGGINGFACE_MODEL") ??
+      "meta-llama/Llama-3.1-8B-Instruct:scaleway";
     this.hfClient = new InferenceClient(this.huggingFaceApiKey);
     this.genAI = new GoogleGenerativeAI(geminiKey);
     this.model = this.genAI.getGenerativeModel({
       model: "gemini-2.0-flash",
       generationConfig: {
-        temperature: 0.1,           // Lower = more deterministic classification
-        responseMimeType: "application/json"
-      }
+        temperature: 0.1,
+        responseMimeType: "application/json",
+      },
     });
   }
 
@@ -151,56 +173,99 @@ export class AiService {
     message: string,
     conversationId?: string
   ): Promise<{ action: ProposedAction; sessionId: string }> {
-    const session = await this.aiRepo.findOrCreateSession(organizationId, conversationId);
+    const session = await this.aiRepo.findOrCreateSession(
+      organizationId,
+      conversationId
+    );
     const sessionId = session.id;
     const history = await this.aiRepo.findRecentMessages(sessionId);
+
+    // Bare yes/no should NEVER reach proposeAction.
+    // The processor handles them before calling this method.
+    // If somehow they slip through, return unknown so the processor
+    // can handle it gracefully rather than creating a stale action.
+    const isBareConfirmation =
+      /^(yes|yeah|ok|okay|sure|confirm|proceed|do it|go ahead|correct|right|y|no|nope|cancel|stop|nah|n)$/i.test(
+        message.trim()
+      );
+    if (isBareConfirmation) {
+      const action: ProposedAction = {
+        intent: "UNKNOWN",
+        confidence: 1,
+        toolName: "unknown",
+        parameters: { sourceText: message },
+        requiresConfirmation: false,
+        response:
+          "I am not sure what you are confirming. Please send your full request again.",
+      };
+      await this.aiRepo.createAiMessage({
+        aiSessionId: sessionId,
+        role: "user",
+        content: message,
+      });
+      await this.aiRepo.createAiMessage({
+        aiSessionId: sessionId,
+        role: "assistant",
+        content: action.response,
+      });
+      return { action, sessionId };
+    }
 
     let proposed: ProposedAction;
     let provider = "unknown";
 
-    const deterministicAction = this.classifyDeterministic(message);
-    if (deterministicAction) {
-      proposed = deterministicAction;
+    const deterministic = this.classifyDeterministic(message);
+    if (deterministic) {
+      proposed = deterministic;
       provider = "deterministic";
-    } else try {
-      if (this.huggingFaceApiKey) {
-        proposed = await this.classifyWithHuggingFace(message, history);
-        provider = "huggingface";
-      } else {
-        proposed = await this.classifyWithGemini(message, history);
-        provider = "gemini";
-      }
-    } catch (primaryErr) {
-      Logger.warn("[AiService] Primary AI classification failed:", (primaryErr as Error)?.message);
+    } else {
       try {
         if (this.huggingFaceApiKey) {
+          proposed = await this.classifyWithHuggingFace(message, history);
+          provider = "huggingface";
+        } else {
           proposed = await this.classifyWithGemini(message, history);
           provider = "gemini";
-        } else {
-          throw primaryErr;
         }
-      } catch (secondaryErr) {
-        Logger.warn("[AiService] Secondary AI classification failed:", (secondaryErr as Error)?.message);
-        proposed = this.fallbackClassify(message, history);
-        provider = "fallback";
+      } catch (primaryErr) {
+        Logger.warn(
+          "[AiService] Primary classification failed:",
+          (primaryErr as Error)?.message
+        );
+        try {
+          if (this.huggingFaceApiKey) {
+            proposed = await this.classifyWithGemini(message, history);
+            provider = "gemini-fallback";
+          } else {
+            throw primaryErr;
+          }
+        } catch (secondaryErr) {
+          Logger.warn(
+            "[AiService] Secondary classification failed:",
+            (secondaryErr as Error)?.message
+          );
+          proposed = this.fallbackClassify(message);
+          provider = "fallback";
+        }
       }
     }
 
-    if (!proposed!) {
-      proposed = this.fallbackClassify(message, history);
-      provider = "fallback";
-    }
-
-    // Validate the parsed action — fix common LLM mistakes
     proposed = this.validateAndRepair(proposed);
 
-    // Persist conversation turn
-    await this.aiRepo.createAiMessage({ aiSessionId: sessionId, role: "user", content: message });
-    await this.aiRepo.createAiMessage({ aiSessionId: sessionId, role: "assistant", content: proposed.response });
+    await this.aiRepo.createAiMessage({
+      aiSessionId: sessionId,
+      role: "user",
+      content: message,
+    });
+    await this.aiRepo.createAiMessage({
+      aiSessionId: sessionId,
+      role: "assistant",
+      content: proposed.response,
+    });
 
-    // Persist intent + action for audit trail
-    await this.persistAction(organizationId, message, sessionId, proposed).catch((err) =>
-      Logger.error("[AiService] persistAction error (non-fatal):", err)
+    await this.persistAction(organizationId, message, sessionId, proposed).catch(
+      (err) =>
+        Logger.error("[AiService] persistAction error (non-fatal):", err)
     );
 
     Logger.log(
@@ -209,13 +274,17 @@ export class AiService {
     return { action: proposed, sessionId };
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Classification backends
+  // ─────────────────────────────────────────────────────────────────────────
+
   private async classifyWithGemini(
     message: string,
     history: { role: string; content: string }[],
     retries = 3
   ): Promise<ProposedAction> {
     if (Date.now() < AiService.geminiBackoffUntilMs) {
-      throw new Error("Gemini temporarily disabled due to recent quota/rate-limit error");
+      throw new Error("Gemini temporarily disabled due to rate-limit");
     }
 
     const contextBlock =
@@ -228,15 +297,14 @@ export class AiService {
         const result = await this.model.generateContent([
           { text: SYSTEM_PROMPT },
           { text: `--- CONVERSATION HISTORY ---\n${contextBlock}` },
-          { text: `--- NEW USER MESSAGE ---\n${message}` }
+          { text: `--- NEW USER MESSAGE ---\n${message}` },
         ]);
         return this.parseJsonResponse(result.response.text());
       } catch (err) {
-        const errStr = String(err);
         const isQuota =
-          errStr.includes("429") ||
-          errStr.includes("quota") ||
-          errStr.includes("RESOURCE_EXHAUSTED");
+          String(err).includes("429") ||
+          String(err).includes("quota") ||
+          String(err).includes("RESOURCE_EXHAUSTED");
 
         if (isQuota) {
           AiService.geminiBackoffUntilMs = Date.now() + 60_000;
@@ -244,7 +312,9 @@ export class AiService {
 
         if (isQuota && attempt < retries) {
           const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
-          Logger.warn(`[AiService] Gemini rate-limited (attempt ${attempt}/${retries}), retrying in ${delay}ms`);
+          Logger.warn(
+            `[AiService] Gemini rate-limited (attempt ${attempt}/${retries}), retrying in ${delay}ms`
+          );
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
@@ -252,15 +322,6 @@ export class AiService {
       }
     }
     throw new Error("Gemini classification failed after all retries");
-  }
-
-  private parseJsonResponse(raw: string): ProposedAction {
-    const clean = raw
-      .replace(/```json\s*/gi, "")
-      .replace(/```\s*$/g, "")
-      .trim();
-    const parsed = JSON.parse(clean) as ProposedAction;
-    return parsed;
   }
 
   private async classifyWithHuggingFace(
@@ -279,75 +340,190 @@ export class AiService {
 
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        const chatCompletion = await this.hfClient.chatCompletion({
+        const completion = await this.hfClient.chatCompletion({
           model: this.huggingFaceModel,
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
-            { role: "system", content: `Conversation history:\n${contextBlock}` },
-            { role: "user", content: message }
+            {
+              role: "system",
+              content: `Conversation history:\n${contextBlock}`,
+            },
+            { role: "user", content: message },
           ],
           temperature: 0.2,
-          max_tokens: 500
+          max_tokens: 500,
         });
 
-        const raw = chatCompletion.choices[0]?.message?.content ?? "";
-        if (!raw) {
-          throw new Error(`Empty response from HuggingFace model "${this.huggingFaceModel}"`);
-        }
+        const raw = completion.choices[0]?.message?.content ?? "";
+        if (!raw)
+          throw new Error(
+            `Empty response from HuggingFace model "${this.huggingFaceModel}"`
+          );
         return this.parseJsonResponse(raw);
       } catch (err) {
         if (attempt < retries) {
-          const delay = 1000 * attempt;
-          Logger.warn(`[AiService] Hugging Face failed (attempt ${attempt}/${retries}), retrying in ${delay}ms`);
-          await new Promise((r) => setTimeout(r, delay));
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
           continue;
         }
         throw err;
       }
     }
-    throw new Error("Hugging Face classification failed after all retries");
+    throw new Error("HuggingFace classification failed after all retries");
   }
 
-  
+  // ─────────────────────────────────────────────────────────────────────────
+  // Deterministic fast-path (highest priority, no LLM needed)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private classifyDeterministic(message: string): ProposedAction | null {
+    const m = message.toLowerCase().trim();
+
+    // "add product …" — always a createProduct regardless of LLM
+    if (/\b(add|create|new)\b.*\b(products?|items?)\b/.test(m)) {
+      return {
+        intent: "INVENTORY_SALE",
+        confidence: 0.95,
+        toolName: "createProduct",
+        parameters: { sourceText: message },
+        requiresConfirmation: true,
+        response:
+          "Create this product? Reply YES to confirm or provide the name, price, and quantity if missing.",
+      };
+    }
+
+    // "delete products with 0 stock"
+    if (
+      /\b(delete|remove|clear)\b.*\b(products?|items?)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b/.test(m) ||
+      /\b(delete|remove|clear)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b.*\b(products?|items?)\b/.test(m)
+    ) {
+      return {
+        intent: "INVENTORY_DELETE",
+        confidence: 0.95,
+        toolName: "deleteZeroStockProducts",
+        parameters: { quantity: 0, sourceText: message },
+        requiresConfirmation: true,
+        response:
+          "This will delete all products with 0 stock. Reply YES to confirm or NO to cancel.",
+      };
+    }
+
+    return null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Regex fallback (no LLM, no network)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private fallbackClassify(message: string): ProposedAction {
+    const m = message.toLowerCase().trim();
+
+    if (/\b(low.?stock|running out|almost finish|nearly finish)\b/.test(m)) {
+      return this.read("INVENTORY_QUERY", "lowStockAlert", {}, "Checking for low stock items…");
+    }
+    if (/\b(stock|quantity|how many|remaining|units left)\b/.test(m)) {
+      return this.read("INVENTORY_QUERY", "getStockLevel", { sourceText: message }, "Let me check that stock level.");
+    }
+    if (/\b(product|item|inventory|catalogue)\b/.test(m)) {
+      return this.read("INVENTORY_QUERY", "listProducts", {}, "Pulling up your products…");
+    }
+    if (/\b(who owes|top debtor|list debt|show debt|debt report|outstanding)\b/.test(m)) {
+      return this.read("DEBT_LOOKUP", "listTopDebtors", {}, "Fetching debtors…");
+    }
+    if (/\b(all debts?|full debt|debt summary)\b/.test(m)) {
+      return this.read("DEBT_LOOKUP", "debtSummary", {}, "Fetching full debt report…");
+    }
+    if (/\b(today.?sale|daily sale|how much.?made|overview|dashboard)\b/.test(m)) {
+      return this.read("ANALYTICS_SUMMARY", "todaySales", {}, "Fetching today's overview…");
+    }
+    if (/\b(customer|client|buyer)\b/.test(m) && !/\badd\b|\bcreate\b|\bnew\b/.test(m)) {
+      return this.read("CUSTOMER_LOOKUP", "listCustomers", {}, "Fetching your customer list…");
+    }
+
+    // ---- write actions ----
+    if (/\b(sold|sale|record sale|i sell)\b/.test(m)) {
+      return this.write("INVENTORY_SALE", "recordSale", { sourceText: message },
+        "I will record that sale. Please confirm — what was sold, quantity and price? Reply YES to confirm.");
+    }
+    if (/\b(owes? me|owe me|record debt|on credit)\b/.test(m)) {
+      return this.write("DEBT_CREATE", "recordDebt", { sourceText: message },
+        "I will record that debt. Please confirm — customer name and amount owed?");
+    }
+    if (/\b(settled?|paid|payment made|cleared?)\b.*\b(debt|owe|balance)\b/.test(m)) {
+      return this.write("DEBT_CREATE", "settleDebt", { sourceText: message },
+        "I will mark that debt as paid. Please confirm — customer name and amount paid (or say full payment). Reply YES to confirm.");
+    }
+    if (/\b(add|create|new)\b.*(customer|client)\b/.test(m)) {
+      return this.write("CUSTOMER_CREATE", "createCustomer", { sourceText: message },
+        "I will add that customer. Please confirm — name and phone number?");
+    }
+    if (/\b(invoice|receipt|bill)\b/.test(m)) {
+      return this.write("INVOICE_GENERATION", "createInvoiceDraft", { sourceText: message },
+        "I will draft that invoice. Please confirm the customer and items. Reply YES to confirm.");
+    }
+
+    return {
+      intent: "UNKNOWN",
+      confidence: 0.3,
+      toolName: "unknown",
+      parameters: { sourceText: message },
+      requiresConfirmation: false,
+      response:
+        "I am not sure what you need. You can ask me about products, stock, sales, customers, or debts. What would you like?",
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Validation & repair
+  // ─────────────────────────────────────────────────────────────────────────
+
   private validateAndRepair(action: ProposedAction): ProposedAction {
-    const VALID_TOOLS: ToolName[] = [
+    const ALL_TOOLS: ToolName[] = [
       "getStockLevel", "recordSale", "listProducts", "listTopDebtors",
       "debtSummary", "todaySales", "lowStockAlert", "listCustomers",
-      "createProduct", "deleteZeroStockProducts", "createInvoiceDraft", "createCustomer", "recordDebt", "settleDebt", "unknown"
+      "createProduct", "deleteZeroStockProducts", "createInvoiceDraft",
+      "createCustomer", "recordDebt", "settleDebt", "unknown",
     ];
 
-    const WRITE_TOOLS: ToolName[] = [
-      "recordSale", "createProduct", "deleteZeroStockProducts", "createCustomer", "recordDebt", "settleDebt", "createInvoiceDraft"
-    ];
-    if (!VALID_TOOLS.includes(action.toolName)) {
-      Logger.warn(`[AiService] LLM returned unknown toolName "${action.toolName}", resetting to unknown`);
+    if (!ALL_TOOLS.includes(action.toolName)) {
+      Logger.warn(`[AiService] Unknown toolName "${action.toolName}" — resetting`);
       action.toolName = "unknown";
       action.intent = "UNKNOWN";
       action.requiresConfirmation = false;
     }
 
-    // Write tool must always require confirmation
+    // Write tools must always require confirmation
     if (WRITE_TOOLS.includes(action.toolName) && !action.requiresConfirmation) {
-      Logger.warn(`[AiService] Write tool "${action.toolName}" had requiresConfirmation=false — correcting`);
+      Logger.warn(`[AiService] Write tool "${action.toolName}" missing confirmation flag — correcting`);
       action.requiresConfirmation = true;
+      if (!action.response.toLowerCase().includes("yes")) {
+        action.response += " Reply YES to confirm or NO to cancel.";
+      }
     }
 
-    // Read tool must never require confirmation
-    if (!WRITE_TOOLS.includes(action.toolName) && action.toolName !== "unknown" && action.requiresConfirmation) {
+    // Read tools must never require confirmation
+    if (READ_TOOLS.includes(action.toolName) && action.requiresConfirmation) {
       action.requiresConfirmation = false;
     }
 
-    // Ensure parameters is always an object
     if (!action.parameters || typeof action.parameters !== "object") {
       action.parameters = {};
     }
 
     // Clamp confidence
-    if (typeof action.confidence !== "number" || action.confidence < 0 || action.confidence > 1) {
+    if (
+      typeof action.confidence !== "number" ||
+      action.confidence < 0 ||
+      action.confidence > 1
+    ) {
       action.confidence = 0.5;
     }
 
-    // recordDebt: amount must be a number
+    // Ensure response is always a non-empty string
+    if (!action.response || typeof action.response !== "string") {
+      action.response = "Processing your request…";
+    }
+
+    // Coerce amount strings to numbers
     if (action.toolName === "recordDebt") {
       const raw = action.parameters.amount;
       if (typeof raw === "string") {
@@ -357,6 +533,7 @@ export class AiService {
     }
 
     if (action.toolName === "settleDebt") {
+      // Coerce settleAll
       if (typeof action.parameters.settleAll === "string") {
         action.parameters.settleAll = ["true", "yes", "1", "all"].includes(
           action.parameters.settleAll.toLowerCase()
@@ -369,210 +546,44 @@ export class AiService {
       }
     }
 
-    // recordSale: ensure items array exists
-    if (action.toolName === "recordSale" && !Array.isArray(action.parameters.items)) {
+    if (
+      action.toolName === "recordSale" &&
+      !Array.isArray(action.parameters.items)
+    ) {
       action.parameters.items = [];
     }
 
     return action;
   }
 
-  
-  private fallbackClassify(
-    message: string,
-    history: { role: string; content: string }[] = []
-  ): ProposedAction {
-    const m = message.toLowerCase().trim();
-    const lastAssistant = [...history].reverse().find((h) => h.role === "assistant");
-    const lastAiText = lastAssistant?.content.toLowerCase() ?? "";
-    const prevUserMsg = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
+  // ─────────────────────────────────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────────────────────────────────
 
-    const isYes = /^(yes|yeah|ok|okay|sure|confirm|proceed|do it|go ahead|correct|right)$/i.test(m);
-    const lastAssistantAskedForConfirmation = /\breply\s+yes\s+to\s+confirm\b/.test(lastAiText);
-
-    // If the AI was awaiting confirmation for a specific write tool, honour the YES
-    if (isYes && lastAssistantAskedForConfirmation) {
-      if (
-        lastAiText.includes("delete") &&
-        (lastAiText.includes("zero") || lastAiText.includes("0 quantity") || lastAiText.includes("no stock"))
-      ) {
-        return this.makeWriteAction("INVENTORY_DELETE", "deleteZeroStockProducts",
-          { sourceText: prevUserMsg, quantity: 0 },
-          "Deleting products with zero stock now..."
-        );
-      }
-      if (lastAiText.includes("record") && lastAiText.includes("debt")) {
-        return this.makeWriteAction("DEBT_CREATE", "recordDebt",
-          { sourceText: prevUserMsg },
-          "✅ Recording the debt now…"
-        );
-      }
-      if (lastAiText.includes("record") && lastAiText.includes("sale")) {
-        return this.makeWriteAction("INVENTORY_SALE", "recordSale",
-          { sourceText: prevUserMsg },
-          "✅ Recording the sale now…"
-        );
-      }
-      if (lastAiText.includes("create") && lastAiText.includes("product")) {
-        return this.makeWriteAction("INVENTORY_SALE", "createProduct",
-          { sourceText: prevUserMsg },
-          "✅ Creating the product now…"
-        );
-      }
-      if (lastAiText.includes("create") && lastAiText.includes("customer")) {
-        return this.makeWriteAction("CUSTOMER_CREATE", "createCustomer",
-          { sourceText: prevUserMsg },
-          "✅ Adding the customer now…"
-        );
-      }
-    }
-
-    if (/\b(low.?stock|running out|almost finish|nearly finish)\b/.test(m)) {
-      return this.makeReadAction("INVENTORY_QUERY", "lowStockAlert", {}, "Checking for low stock items…");
-    }
-    if (
-      /\b(delete|remove|clear)\b.*\b(products?|items?|inventory)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b/.test(m) ||
-      /\b(delete|remove|clear)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b.*\b(products?|items?|inventory)\b/.test(m)
-    ) {
-      return {
-        intent: "INVENTORY_DELETE", confidence: 0.9, toolName: "deleteZeroStockProducts",
-        parameters: { quantity: 0, sourceText: message }, requiresConfirmation: true,
-        response: "This will delete all active products with 0 quantity. Reply YES to confirm."
-      };
-    }
-    if (/\b(stock|quantity|how many|remaining|units left)\b/.test(m)) {
-      return this.makeReadAction("INVENTORY_QUERY", "getStockLevel", { sourceText: message }, "Let me check the stock level.");
-    }
-    if (/\b(product|item|inventory|what (do )?i sell|catalogue)\b/.test(m)) {
-      return this.makeReadAction("INVENTORY_QUERY", "listProducts", {}, "Pulling up your products…");
-    }
-    if (/\b(who owes|top debtor|list debt|show debt|debt report|outstanding)\b/.test(m)) {
-      return this.makeReadAction("DEBT_LOOKUP", "listTopDebtors", {}, "Fetching debtors…");
-    }
-    if (/\b(no one|nobody|none)\b.*\b(owes?|owing|debt|balance)\b/.test(m)) {
-      return {
-        intent: "DEBT_CREATE", confidence: 0.85, toolName: "settleDebt",
-        parameters: { settleAll: true, amount: null, sourceText: message }, requiresConfirmation: true,
-        response: "Understood. This will mark all outstanding debts as fully paid. Reply YES to confirm."
-      };
-    }
-    if (/\b(settled?|paid|payment made|cleared?)\b.*\b(debt|owe|owing|balance)\b/.test(m)) {
-      return {
-        intent: "DEBT_CREATE", confidence: 0.8, toolName: "settleDebt",
-        parameters: { sourceText: message }, requiresConfirmation: true,
-        response: "I'll mark that debt as paid. Please confirm the customer name and amount paid (or say full payment)."
-      };
-    }
-    if (/\b(all debts?|full debt|debt summary)\b/.test(m)) {
-      return this.makeReadAction("DEBT_LOOKUP", "debtSummary", {}, "Fetching full debt report…");
-    }
-    if (/\b(today.?sale|daily sale|how much.?made|business summary|overview|dashboard)\b/.test(m)) {
-      return this.makeReadAction("ANALYTICS_SUMMARY", "todaySales", {}, "Fetching today's overview…");
-    }
-    if (/\b(customer|client|buyer|who buy)\b/.test(m) && !/\badd\b|\bcreate\b|\bnew\b/.test(m)) {
-      return this.makeReadAction("CUSTOMER_LOOKUP", "listCustomers", {}, "Fetching your customer list…");
-    }
-
-    if (/\b(sold|sale|record sale|i sell)\b/.test(m)) {
-      return {
-        intent: "INVENTORY_SALE", confidence: 0.65, toolName: "recordSale",
-        parameters: { sourceText: message }, requiresConfirmation: true,
-        response: "I'll record that sale. Please confirm — what was sold, quantity, and price?"
-      };
-    }
-    if (/\b(owes? me|owe me|record debt|credit)\b/.test(m)) {
-      return {
-        intent: "DEBT_CREATE", confidence: 0.65, toolName: "recordDebt",
-        parameters: { sourceText: message }, requiresConfirmation: true,
-        response: "I'll record that debt. Please confirm — customer name and amount owed?"
-      };
-    }
-    if (/\b(add|create|new)\b.*(product|item)\b/.test(m)) {
-      return {
-        intent: "INVENTORY_SALE", confidence: 0.6, toolName: "createProduct",
-        parameters: { sourceText: message }, requiresConfirmation: true,
-        response: "I'll create that product. Please confirm — name, price, and unit?"
-      };
-    }
-    if (/\b(add|create|new)\b.*(customer|client)\b/.test(m)) {
-      return {
-        intent: "CUSTOMER_CREATE", confidence: 0.6, toolName: "createCustomer",
-        parameters: { sourceText: message }, requiresConfirmation: true,
-        response: "I'll add that customer. Please confirm — name and phone number?"
-      };
-    }
-    if (/\b(invoice|receipt|bill)\b/.test(m)) {
-      return {
-        intent: "INVOICE_GENERATION", confidence: 0.6, toolName: "createInvoiceDraft",
-        parameters: { sourceText: message }, requiresConfirmation: true,
-        response: "I'll draft that invoice. Please confirm the customer and items."
-      };
-    }
-    return {
-      intent: "UNKNOWN", confidence: 0.3, toolName: "unknown",
-      parameters: { sourceText: message }, requiresConfirmation: false,
-      response:
-        "I'm not sure what you need. You can ask me about products, stock, sales, customers, or debts. What would you like?"
-    };
+  private parseJsonResponse(raw: string): ProposedAction {
+    const clean = raw
+      .replace(/```json\s*/gi, "")
+      .replace(/```\s*$/g, "")
+      .trim();
+    return JSON.parse(clean) as ProposedAction;
   }
 
-  private classifyDeterministic(message: string): ProposedAction | null {
-    const m = message.toLowerCase().trim();
-    const isBareConfirmation = /^(yes|yeah|ok|okay|sure|confirm|proceed|do it|go ahead|correct|right)$/i.test(m);
-    if (isBareConfirmation) {
-      return {
-        intent: "UNKNOWN",
-        confidence: 0.9,
-        toolName: "unknown",
-        parameters: { sourceText: message },
-        requiresConfirmation: false,
-        response: "I don't have anything waiting for confirmation. Please send the full request again."
-      };
-    }
-
-    if (/\b(add|create|new)\b.*\b(products?|items?)\b/.test(m)) {
-      return {
-        intent: "INVENTORY_SALE",
-        confidence: 0.9,
-        toolName: "createProduct",
-        parameters: { sourceText: message },
-        requiresConfirmation: true,
-        response: "Create this product with its opening stock count if provided? Example: White shirt 10000 qty 5. Reply YES to confirm."
-      };
-    }
-
-    const deleteZeroStock =
-      /\b(delete|remove|clear)\b.*\b(products?|items?|inventory)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b/.test(m) ||
-      /\b(delete|remove|clear)\b.*\b(0|zero|no)\s*(qty|quantity|stock|units?)\b.*\b(products?|items?|inventory)\b/.test(m);
-
-    if (!deleteZeroStock) return null;
-
-    return {
-      intent: "INVENTORY_DELETE",
-      confidence: 0.95,
-      toolName: "deleteZeroStockProducts",
-      parameters: { quantity: 0, sourceText: message },
-      requiresConfirmation: true,
-      response: "This will delete all active products with 0 quantity. Reply YES to confirm."
-    };
-  }
-
-  private makeReadAction(
-    intent: IntentType,
-    toolName: ToolName,
-    parameters: Record<string, unknown>,
-    response: string
-  ): ProposedAction {
-    return { intent, confidence: 0.7, toolName, parameters, requiresConfirmation: false, response };
-  }
-
-  private makeWriteAction(
+  private read(
     intent: IntentType,
     toolName: ToolName,
     parameters: Record<string, unknown>,
     response: string
   ): ProposedAction {
     return { intent, confidence: 0.75, toolName, parameters, requiresConfirmation: false, response };
+  }
+
+  private write(
+    intent: IntentType,
+    toolName: ToolName,
+    parameters: Record<string, unknown>,
+    response: string
+  ): ProposedAction {
+    return { intent, confidence: 0.75, toolName, parameters, requiresConfirmation: true, response };
   }
 
   private async persistAction(
@@ -585,7 +596,7 @@ export class AiService {
       organizationId,
       name: proposed.intent,
       confidence: proposed.confidence,
-      input: message
+      input: message,
     });
 
     await this.aiRepo.createAction({
@@ -596,11 +607,8 @@ export class AiService {
       confidence: proposed.confidence,
       status: proposed.requiresConfirmation ? "NEEDS_CONFIRMATION" : "PROPOSED",
       validation: {
-        rule: "AI actions are proposals only; domain services validate before mutation."
-      }
+        rule: "AI actions are proposals only; domain services validate before mutation.",
+      },
     });
   }
 }
-
-
-
