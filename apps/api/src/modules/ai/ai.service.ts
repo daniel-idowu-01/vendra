@@ -378,6 +378,13 @@ export class AiService {
   private classifyDeterministic(message: string): ProposedAction | null {
     const m = message.toLowerCase().trim();
 
+    const availabilityMatch = m.match(/^(?:do you (?:have|sell|stock)|is there|have you got)\s+(.+?)(?:\?|$)/i);
+    if (availabilityMatch?.[1]) {
+      return this.read("INVENTORY_QUERY", "getStockLevel", {
+        productName: availabilityMatch[1].trim(), sourceText: message
+      }, "Let me check that product.");
+    }
+
     // "add product …" — always a createProduct regardless of LLM
     if (/\b(add|create|new)\b.*\b(products?|items?)\b/.test(m)) {
       return {

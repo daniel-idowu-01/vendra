@@ -64,11 +64,12 @@ export class InventoryService {
       }
 
       return await this.prisma.$transaction(async (tx) => {
+        const sku = dto.sku?.trim() || await this.generateSku(organizationId, name, tx);
         const product = await tx.product.create({
           data: {
             organization: { connect: { id: organizationId } },
             name,
-            sku: dto.sku,
+            sku,
             barcode: dto.barcode,
             unit: dto.unit ?? "unit",
             costPrice: dto.costPrice ?? 0,
@@ -138,6 +139,17 @@ export class InventoryService {
       Logger.error("[InventoryService.getStockLevel] Unexpected error:", error);
       throw new InternalServerErrorException("Failed to retrieve stock level.");
     }
+  }
+
+  private async generateSku(organizationId: string, name: string, tx: Prisma.TransactionClient) {
+    const prefix = name.normalize("NFKD").replace(/[^a-zA-Z0-9\s]/g, "").trim()
+      .split(/\s+/).map((word) => word.slice(0, 3)).join("").slice(0, 9).toUpperCase() || "PRD";
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const sku = `${prefix}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+      const exists = await tx.product.findFirst({ where: { organizationId, sku }, select: { id: true } });
+      if (!exists) return sku;
+    }
+    return `${prefix}-${Date.now().toString(36).toUpperCase()}`;
   }
 
   async deleteZeroStockProducts(organizationId: string) {

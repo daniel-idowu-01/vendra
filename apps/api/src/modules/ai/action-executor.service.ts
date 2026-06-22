@@ -43,11 +43,15 @@ export class ActionExecutorService {
         case "getStockLevel": {
           // Prefer productId from parameters; fall back to name-based lookup
           let productId = parameters.productId as string | undefined;
-          if (!productId && parameters.productName) {
-            const found = await this.prisma.product.findFirst({
+          const requestedName = String(parameters.productName ?? "").trim() ||
+            this.extractAvailabilityProduct(String(parameters.sourceText ?? ""));
+          let found: any = null;
+          if (!productId && requestedName) {
+            found = await this.prisma.product.findFirst({
               where: {
                 organizationId,
-                name: { contains: String(parameters.productName), mode: "insensitive" }
+                isActive: true,
+                name: { contains: requestedName, mode: "insensitive" }
               }
             });
             productId = found?.id;
@@ -58,14 +62,18 @@ export class ActionExecutorService {
             const products = await this.inventory.listProducts(organizationId, { page: 1, pageSize: 100 });
             if (products.items.length === 0) return "No products found.";
             const lines = products.items
-              .slice(0, 15)
-              .map((p: any) => `• ${p.name} (SKU: ${p.sku ?? "N/A"})`);
+              .slice(0, 5)
+              .map((p: any) => `• ${p.name} (SKU: ${p.sku})`);
+            if (requestedName) {
+              return `Sorry, we don't currently have *${requestedName}*.\n\nYou may like:\n${lines.join("\n")}`;
+            }
             return `📦 *Which product's stock do you want to check?*\n${lines.join("\n")}\n\nReply with the product name.`;
           }
 
           const stock = await this.inventory.getStockLevel(organizationId, productId);
           const branchLines = stock.byBranch.map((b: any) => `  • Branch: ${b.quantity} units`).join("\n");
-          return `📊 *Stock Level*\nTotal: *${stock.total} units*\n${branchLines}`;
+          const availability = stock.total > 0 ? "Yes, it is available." : "It is currently out of stock.";
+          return `${availability}\n📦 *${found?.name ?? "Product"}*\nPrice: *₦${Number(found?.sellingPrice ?? 0).toLocaleString("en-NG")}*\nStock: *${stock.total} ${found?.unit ?? "units"}*${branchLines ? `\n${branchLines}` : ""}`;
         }
 
         case "lowStockAlert": {
@@ -524,6 +532,13 @@ export class ActionExecutorService {
       }
     }
     return items;
+  }
+
+  private extractAvailabilityProduct(text: string): string {
+    return text
+      .replace(/^(?:do you (?:have|sell|stock)|is there|have you got)\s+/i, "")
+      .replace(/[?.!]+$/, "")
+      .trim();
   }
 
   
