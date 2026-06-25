@@ -1,7 +1,9 @@
 # Vendra Architecture
 
-Vendra is a WhatsApp-first SaaS operating system for African SMEs. The dashboard is
-for setup, review, and exceptions; WhatsApp is the daily operating interface.
+Vendra is a WhatsApp-first SaaS operating system for African wholesalers and
+distributors. The dashboard is for setup, review, and exceptions; WhatsApp is the
+daily operating interface for field sales, stock checks, invoice sharing, and debt
+follow-up.
 
 ## Main Decisions
 

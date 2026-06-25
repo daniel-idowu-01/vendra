@@ -55,7 +55,7 @@ export default function LoginPage() {
         <div className="space-y-3">
           <p className="text-sm uppercase tracking-[0.32em] text-muted-foreground">Vendra</p>
           <h1 className="text-3xl font-semibold tracking-[-0.04em]">
-            {isSignup ? "Create your workspace" : "Run your shop from WhatsApp"}
+            {isSignup ? "Create your workspace" : "Run your wholesale operation from WhatsApp"}
           </h1>
           <p className="max-w-lg text-sm text-muted-foreground">
             {isSignup

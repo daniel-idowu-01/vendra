@@ -1,9 +1,8 @@
 # Vendra
 
-Vendra is a WhatsApp-first business operating system for African SMEs. It helps
-distributors, pharmacies, supermarkets, wholesalers, beauty supply sellers, and
-building material sellers manage stock, invoices, debts, analytics, and AI-assisted
-business workflows.
+Vendra is a WhatsApp-first business operating system for African wholesalers and
+distributors. It helps bulk trade teams manage stock, invoices, customer debts,
+route-ready sales workflows, analytics, and AI-assisted business operations.
 
 ## Apps
 
@@ -27,6 +26,7 @@ The web app runs on `http://localhost:3000` and the API on
 
 ## Product Direction
 
-Vendra should stay simple and conversational. The web dashboard supports setup,
-review, and admin workflows; WhatsApp is the daily operating surface for stock
-checks, sale updates, debt follow-up, invoice sharing, and AI summaries.
+Vendra should stay simple and conversational for wholesale and distribution teams.
+The web dashboard supports setup, review, and admin workflows; WhatsApp is the
+daily operating surface for stock checks, sales rep updates, debt follow-up,
+invoice sharing, customer account summaries, and AI summaries.

@@ -4,7 +4,7 @@ import { Providers } from "@/lib/providers";
 
 export const metadata: Metadata = {
   title: "Vendra",
-  description: "WhatsApp-first business operating system for African SMEs."
+  description: "WhatsApp-first business operating system for African wholesalers and distributors."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
