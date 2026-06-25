@@ -214,7 +214,7 @@ export class AiService {
     let proposed: ProposedAction;
     let provider = "unknown";
 
-    const deterministic = this.classifyDeterministic(message);
+    const deterministic = this.classifyDeterministic(message, history);
     if (deterministic) {
       proposed = deterministic;
       provider = "deterministic";
@@ -375,8 +375,35 @@ export class AiService {
   // Deterministic fast-path (highest priority, no LLM needed)
   // ─────────────────────────────────────────────────────────────────────────
 
-  private classifyDeterministic(message: string): ProposedAction | null {
+  private classifyDeterministic(
+    message: string,
+    history: { role: string; content: string }[] = []
+  ): ProposedAction | null {
     const m = message.toLowerCase().trim();
+
+    const quantityFollowUp = m.match(/^(?:i\s*(?:want|need|will take|would like)|give me)\s+(\d+)\s*(?:units?|pieces?|pcs?)?$/i);
+    if (quantityFollowUp) {
+      const previousUserMessage = [...history].reverse().find((entry) => entry.role === "user")?.content ?? "";
+      const productName = this.extractProductFromAvailabilityQuestion(previousUserMessage);
+      if (productName) {
+        const quantity = Number(quantityFollowUp[1]);
+        return {
+          intent: "INVENTORY_SALE",
+          confidence: 0.98,
+          toolName: "recordSale",
+          parameters: { items: [{ name: productName, quantity }], sourceText: message },
+          requiresConfirmation: true,
+          response: `Sell ${quantity} ${quantity === 1 ? "unit" : "units"} of ${productName}? Reply YES to confirm or NO to cancel.`,
+        };
+      }
+    }
+
+    const availabilityMatch = m.match(/^(?:do you (?:have|sell|stock)|is there|have you got)\s+(.+?)(?:\?|$)/i);
+    if (availabilityMatch?.[1]) {
+      return this.read("INVENTORY_QUERY", "getStockLevel", {
+        productName: availabilityMatch[1].trim(), sourceText: message
+      }, "Let me check that product.");
+    }
 
     // "add product …" — always a createProduct regardless of LLM
     if (/\b(add|create|new)\b.*\b(products?|items?)\b/.test(m)) {
@@ -408,6 +435,13 @@ export class AiService {
     }
 
     return null;
+  }
+
+  private extractProductFromAvailabilityQuestion(message: string): string {
+    return message
+      .replace(/^(?:how much (?:is|for)|what(?:'s| is) the price of|price of|do you (?:have|sell|stock)|is there|have you got)\s+/i, "")
+      .replace(/[?.!]+$/, "")
+      .trim();
   }
 
   // ─────────────────────────────────────────────────────────────────────────

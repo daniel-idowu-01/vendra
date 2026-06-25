@@ -74,11 +74,12 @@ export class AiRepository {
     return this.prisma.aiMessage.create({ data });
   }
 
-  findRecentMessages(aiSessionId: string, limit = 10) {
-    return this.prisma.aiMessage.findMany({
+  async findRecentMessages(aiSessionId: string, limit = 10) {
+    const messages = await this.prisma.aiMessage.findMany({
       where: { aiSessionId },
-      orderBy: { createdAt: "asc" },
+      orderBy: { createdAt: "desc" },
       take: limit
     });
+    return messages.reverse();
   }
 }

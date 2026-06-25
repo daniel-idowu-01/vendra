@@ -23,31 +23,31 @@ const features = [
     icon: MessageCircle,
     title: "WhatsApp-first operations",
     description:
-      "Manage stock, create invoices and follow up customers directly from WhatsApp — no app downloads needed."
+      "Manage bulk stock, create invoices, and follow up trade customers directly from WhatsApp - no app downloads needed."
   },
   {
     icon: Package,
     title: "Smart inventory",
     description:
-      "Track stock across multiple branches, set low-stock alerts, and get restock recommendations."
+      "Track stock across warehouses, branches, and delivery-ready batches with low-stock alerts and restock recommendations."
   },
   {
     icon: FileText,
     title: "Instant invoicing",
     description:
-      "Generate and send professional invoices via WhatsApp or email. Payment links included."
+      "Generate and send wholesale invoices via WhatsApp or email. Payment links included."
   },
   {
     icon: HandCoins,
     title: "Debt recovery",
     description:
-      "Automated payment reminders and WhatsApp follow-ups for overdue invoices."
+      "Automated payment reminders and WhatsApp follow-ups for retailers and trade customers with overdue balances."
   },
   {
     icon: BarChart3,
     title: "Business analytics",
     description:
-      "Real-time dashboards for sales, inventory turnover, and customer insights."
+      "Real-time dashboards for sales reps, inventory turnover, top customers, and route performance."
   },
   {
     icon: Wifi,
@@ -66,15 +66,15 @@ const steps = [
   },
   {
     icon: Store,
-    title: "Set up your shop",
+    title: "Set up your operation",
     description:
-      "Add products, configure branches, and invite your team. Takes less than 10 minutes."
+      "Add products, configure warehouses or branches, and invite your sales and admin team. Takes less than 10 minutes."
   },
   {
     icon: TrendingUp,
-    title: "Grow your business",
+    title: "Move more volume",
     description:
-      "Sell, invoice and collect payments — all from one polished workspace. Your AI assistant handles the rest."
+      "Sell, invoice, and collect payments from one polished workspace. Your AI assistant keeps the back office moving."
   }
 ];
 
@@ -109,7 +109,7 @@ export default function LandingPage() {
         <section className="mx-auto max-w-7xl px-4 pb-20 pt-16 sm:px-6 sm:pb-28 sm:pt-24 lg:px-10">
           <div className="mx-auto max-w-3xl text-center">
             <p className="text-xs uppercase tracking-[0.32em] text-muted-foreground">
-              WhatsApp-first business OS
+              WhatsApp-first wholesale OS
             </p>
             <h1 className="mt-6 text-4xl font-semibold tracking-[-0.04em] text-foreground sm:text-5xl lg:text-6xl">
               Run your business from
@@ -117,9 +117,9 @@ export default function LandingPage() {
               <Typewriter />
             </h1>
             <p className="mx-auto mt-6 max-w-xl text-base leading-7 text-muted-foreground sm:text-lg sm:leading-8">
-              Vendra is the operating system for African SMEs. Manage inventory,
-              send invoices, track debts and get insights — all through WhatsApp
-              and a polished web dashboard.
+              Vendra is the operating system for African wholesalers and
+              distributors. Manage inventory, send invoices, track customer debts,
+              and get trade insights through WhatsApp and a polished web dashboard.
             </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
               <Link href="/login">
@@ -161,8 +161,8 @@ export default function LandingPage() {
                 One workspace. Zero complexity.
               </h2>
               <p className="mt-4 text-base leading-7 text-muted-foreground">
-                No more juggling between apps. Vendra brings your entire
-                operation into a single, intelligent system.
+                No more juggling between ledgers, chats, and spreadsheets. Vendra
+                brings wholesale operations into a single, intelligent system.
               </p>
             </div>
 
@@ -221,11 +221,11 @@ export default function LandingPage() {
                 Get started
               </p>
               <h2 className="mt-4 text-3xl font-semibold tracking-[-0.03em] text-foreground sm:text-4xl">
-                Ready to transform your business?
+                Ready to run wholesale from WhatsApp?
               </h2>
               <p className="mx-auto mt-4 max-w-md text-base leading-7 text-muted-foreground">
-                Join African SMEs that run their operations from WhatsApp and
-                one beautiful dashboard.
+                Join wholesale and distribution teams that run stock, invoices,
+                debts, and sales follow-up from WhatsApp and one dashboard.
               </p>
               <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
                 <Link href="/login">

@@ -2,7 +2,7 @@
   "name": "vendra",
   "version": "0.1.0",
   "private": true,
-  "description": "WhatsApp-first business operating system for African SMEs.",
+  "description": "WhatsApp-first business operating system for African wholesalers and distributors.",
   "packageManager": "pnpm@9.15.4",
   "scripts": {
     "dev": "pnpm --parallel --filter @vendra/api --filter @vendra/web dev",
