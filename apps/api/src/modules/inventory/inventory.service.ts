@@ -325,7 +325,23 @@ export class InventoryService {
           organizationId, dto.productId, dto.branchId, tx
         );
 
-        if (existingBatch) {
+        if (signedQuantity < 0) {
+          // Outflow (SALE/STOCK_OUT/TRANSFER): decrement atomically with a
+          // conditional write so two concurrent sales can never oversell. The
+          // `quantity >= needed` guard is evaluated at write time under the
+          // row lock, so a count of 0 means there isn't enough stock.
+          const needed = -signedQuantity;
+          if (!existingBatch) {
+            throw new BadRequestException("Insufficient stock for this product at the selected branch.");
+          }
+          const decremented = await tx.productBatch.updateMany({
+            where: { id: existingBatch.id, quantity: { gte: needed } },
+            data: { quantity: { decrement: needed } }
+          });
+          if (decremented.count === 0) {
+            throw new BadRequestException("Insufficient stock for this product at the selected branch.");
+          }
+        } else if (existingBatch) {
           await this.inventoryRepo.updateBatch(
             existingBatch.id,
             { quantity: { increment: signedQuantity } },

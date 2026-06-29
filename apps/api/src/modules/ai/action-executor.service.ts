@@ -224,12 +224,24 @@ export class ActionExecutorService {
             if (openDebts.length === 0) return "✅ No outstanding debts to settle.";
 
             const totalOutstanding = openDebts.reduce((s, d) => s + Number(d.outstanding), 0);
-            for (const debt of openDebts) {
-              await this.prisma.debtRecord.update({
-                where: { id: debt.id },
-                data: { outstanding: 0, status: "PAID" }
-              });
-            }
+            // All-or-nothing: clear every debt and log a payment for each, in one
+            // transaction so a mid-way failure can't leave debts half-settled.
+            await this.prisma.$transaction(async (tx) => {
+              for (const debt of openDebts) {
+                await tx.debtPayment.create({
+                  data: {
+                    organizationId,
+                    debtRecordId: debt.id,
+                    amount: debt.outstanding,
+                    note: "Settled via WhatsApp (all debts)"
+                  }
+                });
+                await tx.debtRecord.update({
+                  where: { id: debt.id },
+                  data: { outstanding: 0, status: "PAID" }
+                });
+              }
+            });
             return `✅ *All debts settled*\nTotal cleared: ₦${totalOutstanding.toLocaleString("en-NG")}`;
           }
 
@@ -250,12 +262,22 @@ export class ActionExecutorService {
           const totalOutstanding = openDebts.reduce((s, d) => s + Number(d.outstanding), 0);
 
           if (amount === null || amount >= totalOutstanding) {
-            for (const debt of openDebts) {
-              await this.prisma.debtRecord.update({
-                where: { id: debt.id },
-                data: { outstanding: 0, status: "PAID" }
-              });
-            }
+            await this.prisma.$transaction(async (tx) => {
+              for (const debt of openDebts) {
+                await tx.debtPayment.create({
+                  data: {
+                    organizationId,
+                    debtRecordId: debt.id,
+                    amount: debt.outstanding,
+                    note: "Settled via WhatsApp (full payment)"
+                  }
+                });
+                await tx.debtRecord.update({
+                  where: { id: debt.id },
+                  data: { outstanding: 0, status: "PAID" }
+                });
+              }
+            });
             return `✅ *Debt settled*\nCustomer: ${customer.name}\nAmount: ₦${totalOutstanding.toLocaleString("en-NG")}\nStatus: Fully paid`;
           }
 
@@ -263,18 +285,30 @@ export class ActionExecutorService {
             return "⚠️ Amount paid must be greater than 0.";
           }
 
-          let remaining = amount;
-          for (const debt of openDebts) {
-            if (remaining <= 0) break;
-            const current = Number(debt.outstanding);
-            const paid = Math.min(current, remaining);
-            const nextOutstanding = current - paid;
-            await this.prisma.debtRecord.update({
-              where: { id: debt.id },
-              data: { outstanding: nextOutstanding, status: nextOutstanding <= 0 ? "PAID" : "PARTIALLY_PAID" }
-            });
-            remaining -= paid;
-          }
+          // Partial payment: apply across oldest debts first, recording a
+          // DebtPayment for each portion, all within a single transaction.
+          await this.prisma.$transaction(async (tx) => {
+            let remaining = amount;
+            for (const debt of openDebts) {
+              if (remaining <= 0) break;
+              const current = Number(debt.outstanding);
+              const paid = Math.min(current, remaining);
+              const nextOutstanding = current - paid;
+              await tx.debtPayment.create({
+                data: {
+                  organizationId,
+                  debtRecordId: debt.id,
+                  amount: paid,
+                  note: "Partial payment via WhatsApp"
+                }
+              });
+              await tx.debtRecord.update({
+                where: { id: debt.id },
+                data: { outstanding: nextOutstanding, status: nextOutstanding <= 0 ? "PAID" : "PARTIALLY_PAID" }
+              });
+              remaining -= paid;
+            }
+          });
 
           const newOutstanding = Math.max(totalOutstanding - amount, 0);
           return `✅ *Debt payment recorded*\nCustomer: ${customer.name}\nPaid: ₦${amount.toLocaleString("en-NG")}\nOutstanding: ₦${newOutstanding.toLocaleString("en-NG")}`;
@@ -401,16 +435,9 @@ export class ActionExecutorService {
       return "⚠️ Could not record any items. Please try again.";
     }
 
-    // Create a single payment record for the whole transaction
-    await this.prisma.payment.create({
-      data: {
-        organizationId,
-        provider: "MANUAL",
-        amount: totalAmount,
-        paidAt: new Date(),
-        metadata: { source: "whatsapp_ai", items: recordedLines }
-      }
-    });
+    // Note: inventory.recordTransaction already writes a SALE Payment per item,
+    // so we must NOT create an additional aggregate payment here or revenue
+    // would be double-counted in analytics.
 
     const errorBlock = errors.length > 0 ? `\n\n⚠️ Failed items:\n${errors.join("\n")}` : "";
 

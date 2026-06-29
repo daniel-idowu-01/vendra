@@ -2,10 +2,19 @@ import { BadRequestException, ConflictException, HttpException, Injectable, Inte
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import * as argon2 from "argon2";
+import { createHash, randomBytes, timingSafeEqual } from "crypto";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuthRepository } from "./repositories/auth.repository";
 import { LoginDto, SignupDto } from "./dto/auth.dto";
+
+const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+export type AuthSession = {
+  accessToken: string;
+  refreshToken: string;
+  organizationId?: string;
+};
 
 @Injectable()
 export class AuthService {
@@ -48,7 +57,7 @@ export class AuthService {
         return { user, organization };
       });
 
-      return this.issueTokens(result.user.id, result.user.email, result.organization.id);
+      return this.issueSession(result.user.id, result.user.email, result.organization.id);
     } catch (error) {
       if (error instanceof HttpException) throw error;
       Logger.error("[AuthService.signup] Unexpected error:", error);
@@ -63,7 +72,7 @@ export class AuthService {
         throw new UnauthorizedException("Invalid email or password");
       }
       const membership = await this.authRepo.findFirstActiveMembership(user.id);
-      return this.issueTokens(user.id, user.email, membership?.organizationId);
+      return this.issueSession(user.id, user.email, membership?.organizationId);
     } catch (error) {
       if (error instanceof HttpException) throw error;
       Logger.error("[AuthService.login] Unexpected error:", error);
@@ -71,20 +80,43 @@ export class AuthService {
     }
   }
 
-  async refresh(refreshToken: string) {
-    try {
-      const payload = this.jwt.verify<{ sub: string; email: string; organizationId?: string }>(
-        refreshToken,
-        { secret: this.config.getOrThrow<string>("JWT_REFRESH_SECRET") }
-      );
-      return this.issueTokens(payload.sub, payload.email, payload.organizationId);
-    } catch (error) {
-      if (error instanceof HttpException) throw error;
-      if (error instanceof Error && error.name === "JsonWebTokenError") {
-        throw new UnauthorizedException("Invalid or expired refresh token");
-      }
-      Logger.error("[AuthService.refresh] Unexpected error:", error);
-      throw new InternalServerErrorException("Token refresh failed. Please try again.");
+  /**
+   * Validate an opaque refresh token from the httpOnly cookie, rotate it
+   * (revoke the old one, issue a fresh one), and return a new session.
+   */
+  async rotateRefreshToken(rawToken: string | undefined): Promise<AuthSession> {
+    const parsed = this.parseRefreshToken(rawToken);
+    if (!parsed) throw new UnauthorizedException("Invalid or expired refresh token");
+
+    const stored = await this.authRepo.findRefreshTokenById(parsed.id);
+    if (!stored || stored.revokedAt || stored.expiresAt.getTime() < Date.now()) {
+      throw new UnauthorizedException("Invalid or expired refresh token");
+    }
+
+    const expectedHash = createHash("sha256").update(parsed.secret).digest("hex");
+    const a = Buffer.from(expectedHash);
+    const b = Buffer.from(stored.tokenHash);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      // Secret mismatch on a known id — treat as tampering and revoke.
+      await this.authRepo.revokeRefreshTokenById(stored.id);
+      throw new UnauthorizedException("Invalid or expired refresh token");
+    }
+
+    const user = await this.authRepo.findUserById(stored.userId);
+    if (!user) throw new UnauthorizedException("Invalid or expired refresh token");
+
+    const membership = await this.authRepo.findFirstActiveMembership(user.id);
+    await this.authRepo.revokeRefreshTokenById(stored.id);
+    return this.issueSession(user.id, user.email, membership?.organizationId);
+  }
+
+  /** Revoke the refresh token backing a session (logout). Best-effort. */
+  async revokeRefreshToken(rawToken: string | undefined): Promise<void> {
+    const parsed = this.parseRefreshToken(rawToken);
+    if (!parsed) return;
+    const stored = await this.authRepo.findRefreshTokenById(parsed.id);
+    if (stored && !stored.revokedAt) {
+      await this.authRepo.revokeRefreshTokenById(stored.id);
     }
   }
 
@@ -183,19 +215,43 @@ export class AuthService {
     }
   }
 
-  private issueTokens(userId: string, email: string, organizationId?: string) {
-    const payload = { sub: userId, email, organizationId };
-    return {
-      accessToken: this.jwt.sign(payload, {
+  private async issueSession(
+    userId: string,
+    email: string,
+    organizationId?: string
+  ): Promise<AuthSession> {
+    const accessToken = this.jwt.sign(
+      { sub: userId, email, organizationId },
+      {
         secret: this.config.getOrThrow<string>("JWT_ACCESS_SECRET"),
         expiresIn: "1h"
-      }),
-      refreshToken: this.jwt.sign(payload, {
-        secret: this.config.getOrThrow<string>("JWT_REFRESH_SECRET"),
-        expiresIn: "30d"
-      }),
-      organizationId
-    };
+      }
+    );
+    const refreshToken = await this.createRefreshToken(userId);
+    return { accessToken, refreshToken, organizationId };
+  }
+
+  /**
+   * Mint an opaque refresh token, persist only its SHA-256 hash, and return the
+   * raw `${id}.${secret}` value to be set as an httpOnly cookie. The plaintext
+   * is never stored, so a DB leak cannot reconstruct valid tokens.
+   */
+  private async createRefreshToken(userId: string): Promise<string> {
+    const secret = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(secret).digest("hex");
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+    const stored = await this.authRepo.createRefreshToken({ userId, tokenHash, expiresAt });
+    return `${stored.id}.${secret}`;
+  }
+
+  private parseRefreshToken(raw: string | undefined): { id: string; secret: string } | null {
+    if (!raw) return null;
+    const separator = raw.indexOf(".");
+    if (separator <= 0) return null;
+    const id = raw.slice(0, separator);
+    const secret = raw.slice(separator + 1);
+    if (!id || !secret) return null;
+    return { id, secret };
   }
 }
 

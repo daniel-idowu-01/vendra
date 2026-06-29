@@ -4,9 +4,11 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Queue } from "bullmq";
+import { createHmac, timingSafeEqual } from "crypto";
 import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 
 @Injectable()
@@ -17,14 +19,42 @@ export class WhatsAppService {
     private readonly config: ConfigService
   ) {}
 
-  async enqueueInbound(signature: string, payload: unknown) {
+  /**
+   * Verify the `x-hub-signature-256` header against the raw request body using
+   * the Meta app secret (HMAC-SHA256). Throws on any mismatch so forged
+   * webhooks can never reach the queue or trigger AI write actions.
+   */
+  verifySignature(signature: string | undefined, rawBody: Buffer | undefined) {
+    const appSecret = this.config.get<string>("META_WHATSAPP_APP_SECRET");
+    if (!appSecret) {
+      Logger.error(
+        "[WhatsAppService.verifySignature] META_WHATSAPP_APP_SECRET is not configured — rejecting webhook"
+      );
+      throw new InternalServerErrorException("Webhook verification is not configured");
+    }
+
+    const expected =
+      "sha256=" +
+      createHmac("sha256", appSecret)
+        .update(rawBody ?? Buffer.alloc(0))
+        .digest("hex");
+
+    const provided = signature ?? "";
+    const a = Buffer.from(provided);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      throw new UnauthorizedException("Invalid webhook signature");
+    }
+  }
+
+  async enqueueInbound(payload: unknown) {
     try {
       // Use the actual WhatsApp message ID as the idempotency key.
       // Fall back to a hash only if the message ID is absent (status updates, etc.)
       const providerEventId = this.extractMessageId(payload) ?? this.hashPayload(payload);
 
       await this.whatsappRepo.upsertWebhookEvent(
-        { provider: "whatsapp", providerEventId, payload: { signature, payload } },
+        { provider: "whatsapp", providerEventId, payload: { payload } },
         { provider_providerEventId: { provider: "whatsapp", providerEventId } }
       );
 
@@ -99,6 +129,38 @@ export class WhatsAppService {
       });
     } catch (err) {
       Logger.error("[WhatsAppService.sendText] Unexpected error:", err);
+    }
+  }
+
+  /**
+   * Send a one-off text without any tenant persistence. Used to reply to
+   * inbound messages from numbers that are not linked to a workspace, where we
+   * have no organization to attribute the message to.
+   */
+  async sendRawText(phoneNumberId: string, to: string, text: string): Promise<void> {
+    try {
+      const accessToken = this.config.get<string>("META_WHATSAPP_ACCESS_TOKEN");
+      if (!phoneNumberId || !accessToken) return;
+
+      const url = `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to,
+          type: "text",
+          text: { body: text },
+        }),
+      });
+      if (!res.ok) {
+        Logger.error("[WhatsAppService.sendRawText] Meta API error:", await res.text());
+      }
+    } catch (err) {
+      Logger.error("[WhatsAppService.sendRawText] Unexpected error:", err);
     }
   }
 

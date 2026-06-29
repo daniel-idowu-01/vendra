@@ -16,7 +16,7 @@ export function useOrganizations() {
 export function useLogin() {
   return useMutation({
     mutationFn: (data: { email: string; password: string }) =>
-      apiFetch<{ accessToken: string; refreshToken: string; organizationId?: string }>("/auth/login", {
+      apiFetch<{ accessToken: string; organizationId?: string }>("/auth/login", {
         method: "POST",
         body: JSON.stringify(data)
       })
@@ -32,7 +32,7 @@ export function useSignup() {
       organizationName: string;
       phone?: string;
     }) =>
-      apiFetch<{ accessToken: string; refreshToken: string; organizationId?: string }>("/auth/signup", {
+      apiFetch<{ accessToken: string; organizationId?: string }>("/auth/signup", {
         method: "POST",
         body: JSON.stringify(data)
       })

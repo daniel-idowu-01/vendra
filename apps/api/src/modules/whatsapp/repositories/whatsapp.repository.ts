@@ -34,10 +34,6 @@ export class WhatsAppRepository {
     });
   }
 
-  findFirstOrganization() {
-    return this.prisma.organization.findFirst();
-  }
-
   upsertWhatsAppAccount(organizationId: string, phoneNumberId: string) {
     return this.prisma.whatsAppAccount.upsert({
       where: { phoneNumberId },
