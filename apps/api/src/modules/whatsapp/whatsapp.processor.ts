@@ -9,6 +9,7 @@ import { AiRepository } from "../ai/repositories/ai.repository";
 import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 import { WhatsAppService } from "./whatsapp.service";
 import { InventoryService } from "../inventory/inventory.service";
+import { normalizePhone } from "../../common/utils/phone";
 
 type InboundPayload = {
   payload?: {
@@ -94,8 +95,10 @@ export class WhatsAppProcessor extends WorkerHost {
       // Resolve organisation strictly from the sender's linked identity.
       // Never fall back to an arbitrary organisation — a message from any
       // number would otherwise mutate some unrelated tenant's data.
+      // Look up by the canonical phone form so dashboard-entered numbers
+      // (e.g. "+2349028686300") match WhatsApp's "from" (e.g. "2349028686300").
       const identity = await this.prisma.whatsAppIdentity.findUnique({
-        where: { phone: from },
+        where: { phone: normalizePhone(from) },
       });
 
       if (!identity) {

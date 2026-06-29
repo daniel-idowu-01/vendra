@@ -7,6 +7,7 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { AuthRepository } from "./repositories/auth.repository";
 import { LoginDto, SignupDto } from "./dto/auth.dto";
+import { normalizePhone } from "../../common/utils/phone";
 
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -122,7 +123,7 @@ export class AuthService {
 
   async linkWhatsApp(userId: string, organizationId: string | undefined, phone: string) {
     try {
-      const normalizedPhone = phone?.trim();
+      const normalizedPhone = normalizePhone(phone);
       if (!normalizedPhone) {
         throw new BadRequestException("Phone number is required");
       }
