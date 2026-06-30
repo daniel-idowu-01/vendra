@@ -42,15 +42,19 @@ export default function InvoicesPage() {
 
   const handleCreate = async () => {
     if (validItems.length === 0) return;
-    await createInvoice.mutateAsync({
-      customerId: customerId || undefined,
-      items: validItems.map((i) => ({
-        name: i.name.trim(),
-        quantity: i.quantity,
-        unitPrice: Number(i.unitPrice)
-      }))
-    });
-    resetForm();
+    try {
+      await createInvoice.mutateAsync({
+        customerId: customerId || undefined,
+        items: validItems.map((i) => ({
+          name: i.name.trim(),
+          quantity: i.quantity,
+          unitPrice: Number(i.unitPrice)
+        }))
+      });
+      resetForm();
+    } catch {
+      // Error is surfaced from createInvoice.error below; keep the form open.
+    }
   };
 
   return (
@@ -72,6 +76,14 @@ export default function InvoicesPage() {
       {showCreate && (
         <Card className="space-y-3">
           <p className="text-sm font-semibold">New invoice</p>
+
+          {createInvoice.isError && (
+            <div className="rounded-xl bg-red-900/20 p-3 text-sm text-red-400">
+              {createInvoice.error instanceof Error
+                ? createInvoice.error.message
+                : "Could not create the invoice. Please try again."}
+            </div>
+          )}
 
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">Customer (optional)</label>
