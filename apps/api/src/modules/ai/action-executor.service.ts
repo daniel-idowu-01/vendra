@@ -141,9 +141,19 @@ export class ActionExecutorService {
 
         case "createProduct": {
           const parsedProduct = this.parseProductText(String(parameters.sourceText ?? ""));
-          const name = this.optionalString(parameters, ["name", "productName"]) ?? parsedProduct.name ??
-            this.requireString(parameters, ["name", "productName"], "product name");
-          const price = this.requireNumber(parameters, ["sellingPrice", "price", "amount"]) ?? parsedProduct.price ?? 0;
+          // Prefer explicit params (from the LLM); fall back to the text parser.
+          // Use optionalNumber (not requireNumber) so we don't blindly grab the
+          // first number in the sentence as the price — that's how "20 pieces"
+          // became a ₦20 price.
+          const name =
+            this.optionalString(parameters, ["name", "productName"]) ?? parsedProduct.name;
+          if (!name) {
+            return "⚠️ I couldn't catch the product name. Try: *add product <name> <price> qty <count>* — e.g. *add product Black tee 20000 qty 20*.";
+          }
+          const price =
+            this.optionalNumber(parameters, ["sellingPrice", "price", "amount"]) ??
+            parsedProduct.price ??
+            0;
           const initialQuantity =
             this.optionalNumber(parameters, ["initialQuantity", "quantity", "qty", "stockCount", "stock"]) ??
             parsedProduct.initialQuantity ??
@@ -509,6 +519,18 @@ export class ActionExecutorService {
     return undefined;
   }
 
+  // Unit nouns that may follow a quantity, e.g. "20 pieces", "3 cartons".
+  private static readonly UNIT_NOUNS =
+    "pieces?|pcs?|units?|pairs?|bags?|cartons?|packs?|dozens?|bottles?|boxes?|cans?|crates?|rolls?|sets?|sachets?|tins?|kg|g|litres?|liters?|l|ml";
+
+  /**
+   * Best-effort extraction of { name, price, initialQuantity } from a free-text
+   * product description. Handles both terse commands ("add product Rice 5000
+   * qty 10") and conversational phrasing ("we just got a new black tee. we got
+   * 20 pieces for 20000 per quantity"). This is a fallback for when the LLM
+   * doesn't return structured params — it must never confuse a quantity for a
+   * price, so quantity is resolved first and removed before reading the price.
+   */
   private parseProductText(source: string): {
     name?: string;
     price?: number;
@@ -518,18 +540,44 @@ export class ActionExecutorService {
     if (!text) return {};
 
     const normalized = text.replace(/,/g, "");
-    const stockMatch = normalized.match(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*(\d+)\b/i);
-    const textWithoutStock = normalized.replace(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*\d+\b/gi, "");
-    const priceMatch = textWithoutStock.match(/(?:price\s*)?(?:ngn|n|₦|#)?\s*(\d+(?:\.\d+)?)/i);
-    const price = priceMatch ? parseFloat(priceMatch[1]) : undefined;
-    const initialQuantity = stockMatch ? parseInt(stockMatch[1], 10) : undefined;
+    const units = ActionExecutorService.UNIT_NOUNS;
 
-    const name = text
-      .replace(/\b(add|create|new)\b/gi, "")
-      .replace(/\b(products?|items?)\b/gi, "")
-      .replace(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*\d+\b/gi, "")
-      .replace(/(?:price\s*)?(?:ngn|n|₦|#)?\s*[\d,]+(?:\.\d+)?/i, "")
-      .replace(/\b(?:for|at|@|each|per)\b/gi, "")
+    // --- quantity ---
+    // 1) keyword form: "qty 10", "quantity: 10", "stock of 30"
+    // 2) number + unit noun: "20 pieces", "3 cartons"
+    const qtyKeyword = normalized.match(/\b(?:qty|quantity|stock|count)\s*(?:is|of|:|=)?\s*(\d+)\b/i);
+    const qtyWithUnit = normalized.match(new RegExp(`\\b(\\d+)\\s*(?:${units})\\b`, "i"));
+    const qtyMatch = qtyKeyword ?? qtyWithUnit;
+    const initialQuantity = qtyMatch ? parseInt(qtyMatch[1], 10) : undefined;
+
+    // Remove the quantity clause so it can't be misread as the price.
+    const withoutQty = normalized
+      .replace(/\b(?:qty|quantity|stock|count)\s*(?:is|of|:|=)?\s*\d+\b/gi, " ")
+      .replace(new RegExp(`\\b\\d+\\s*(?:${units})\\b`, "gi"), " ");
+
+    // --- price ---
+    // 1) currency / "price" marker, or "for/at/@ <num>"
+    // 2) otherwise the first remaining number
+    const priceMarker =
+      withoutQty.match(/(?:₦|#|ngn|price\s*(?:is|:)?)\s*(\d+(?:\.\d+)?)/i) ??
+      withoutQty.match(/\b(?:for|at|@)\s*(?:₦|#|ngn)?\s*(\d+(?:\.\d+)?)/i);
+    const priceFallback = withoutQty.match(/\b(\d+(?:\.\d+)?)\b/);
+    const priceStr = (priceMarker ?? priceFallback)?.[1];
+    const price = priceStr ? parseFloat(priceStr) : undefined;
+
+    // --- name ---
+    const name = normalized
+      .replace(/\b(add|create|new|product|products|item|items)\b/gi, " ")
+      .replace(/\b(?:we|i)\s+(?:just\s+)?(?:got|have|had|bought|received|added|get)\b/gi, " ")
+      .replace(/\b(just|some|a|an|the|of)\b/gi, " ")
+      .replace(new RegExp(`\\b\\d+\\s*(?:${units})\\b`, "gi"), " ")
+      .replace(/\b(?:qty|quantity|stock|count)\s*(?:is|of|:|=)?\s*\d+\b/gi, " ")
+      .replace(/\b(?:for|at|@)\s*(?:₦|#|ngn)?\s*\d+(?:\.\d+)?\b/gi, " ")
+      .replace(/(?:₦|#|ngn|price)\s*\d+(?:\.\d+)?/gi, " ")
+      .replace(/\bper\s+(?:quantity|unit|piece|item)\b/gi, " ")
+      .replace(/\b(each|per)\b/gi, " ")
+      .replace(/[.,!?]+/g, " ")
+      .replace(/\b\d+(?:\.\d+)?\b/g, " ")
       .replace(/\s+/g, " ")
       .trim();
 

@@ -78,6 +78,12 @@ For recordSale — extract an "items" array:
 
 For createProduct — extract:
   { "name": string, "sellingPrice": number, "unit": string, "initialQuantity": number }
+  - "name" is the product only, with conversational filler removed.
+  - "initialQuantity" is the stock count ("20 pieces", "we got 20" → 20).
+  - "sellingPrice" is the money amount ("for 20000", "₦20000 each" → 20000).
+  - NEVER swap quantity and price.
+  Example: "we just got a new black tee, 20 pieces for 20000 each" →
+    {"name":"black tee","initialQuantity":20,"sellingPrice":20000,"unit":"piece"}
   If price is missing, set sellingPrice to 0 and ask in response.
 
 For createCustomer — extract:
@@ -214,12 +220,18 @@ export class AiService {
     let proposed: ProposedAction;
     let provider = "unknown";
 
-    const deterministic = this.classifyDeterministic(message, history);
-    if (deterministic) {
-      proposed = deterministic;
-      provider = "deterministic";
+    // Stateful continuation: a bare quantity reply ("I want 5") to a previous
+    // availability question. This depends on conversation state rather than how
+    // the request is phrased, so we resolve it directly and skip the LLM.
+    const followUp = this.classifyConversationalFollowUp(message, history);
+    if (followUp) {
+      proposed = followUp;
+      provider = "follow-up";
     } else {
       try {
+        // The LLM is the PRIMARY understanding + extraction engine so users can
+        // phrase requests however they like (conversational, terse, multilingual,
+        // typos, etc.). HuggingFace first, Gemini as backup.
         if (this.huggingFaceApiKey) {
           proposed = await this.classifyWithHuggingFace(message, history);
           provider = "huggingface";
@@ -244,7 +256,12 @@ export class AiService {
             "[AiService] Secondary classification failed:",
             (secondaryErr as Error)?.message
           );
-          proposed = this.fallbackClassify(message);
+          // Offline / no-LLM safety net only: deterministic fast-paths, then
+          // regex heuristics. These are intentionally last-resort — the LLM
+          // handles the open-ended phrasing whenever it is reachable.
+          proposed =
+            this.classifyDeterministic(message, history) ??
+            this.fallbackClassify(message);
           provider = "fallback";
         }
       }
@@ -372,31 +389,49 @@ export class AiService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Deterministic fast-path (highest priority, no LLM needed)
+  // Conversational continuation (runs ahead of the LLM)
   // ─────────────────────────────────────────────────────────────────────────
 
-  private classifyDeterministic(
+  /**
+   * Resolve a bare quantity reply ("I want 5", "give me 3 units") that follows a
+   * previous availability question, turning it into a recordSale for the product
+   * the user just asked about. This is conversation-state driven, not phrasing
+   * driven, so it runs ahead of the LLM rather than as a fallback.
+   */
+  private classifyConversationalFollowUp(
     message: string,
     history: { role: string; content: string }[] = []
   ): ProposedAction | null {
     const m = message.toLowerCase().trim();
-
     const quantityFollowUp = m.match(/^(?:i\s*(?:want|need|will take|would like)|give me)\s+(\d+)\s*(?:units?|pieces?|pcs?)?$/i);
-    if (quantityFollowUp) {
-      const previousUserMessage = [...history].reverse().find((entry) => entry.role === "user")?.content ?? "";
-      const productName = this.extractProductFromAvailabilityQuestion(previousUserMessage);
-      if (productName) {
-        const quantity = Number(quantityFollowUp[1]);
-        return {
-          intent: "INVENTORY_SALE",
-          confidence: 0.98,
-          toolName: "recordSale",
-          parameters: { items: [{ name: productName, quantity }], sourceText: message },
-          requiresConfirmation: true,
-          response: `Sell ${quantity} ${quantity === 1 ? "unit" : "units"} of ${productName}? Reply YES to confirm or NO to cancel.`,
-        };
-      }
-    }
+    if (!quantityFollowUp) return null;
+
+    const previousUserMessage = [...history].reverse().find((entry) => entry.role === "user")?.content ?? "";
+    const productName = this.extractProductFromAvailabilityQuestion(previousUserMessage);
+    if (!productName) return null;
+
+    const quantity = Number(quantityFollowUp[1]);
+    return {
+      intent: "INVENTORY_SALE",
+      confidence: 0.98,
+      toolName: "recordSale",
+      parameters: { items: [{ name: productName, quantity }], sourceText: message },
+      requiresConfirmation: true,
+      response: `Sell ${quantity} ${quantity === 1 ? "unit" : "units"} of ${productName}? Reply YES to confirm or NO to cancel.`,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Deterministic fast-path — OFFLINE SAFETY NET ONLY.
+  // Only used when every LLM provider is unreachable. When the LLM is up it
+  // handles open-ended phrasing and parameter extraction; do not add patterns
+  // here expecting them to run on the happy path.
+  // ─────────────────────────────────────────────────────────────────────────
+  private classifyDeterministic(
+    message: string,
+    _history: { role: string; content: string }[] = []
+  ): ProposedAction | null {
+    const m = message.toLowerCase().trim();
 
     const availabilityMatch = m.match(/^(?:do you (?:have|sell|stock)|is there|have you got)\s+(.+?)(?:\?|$)/i);
     if (availabilityMatch?.[1]) {
