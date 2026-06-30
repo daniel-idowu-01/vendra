@@ -26,6 +26,7 @@ export type ToolName =
   | "lowStockAlert"
   | "listCustomers"
   | "createProduct"
+  | "deleteProduct"
   | "deleteZeroStockProducts"
   | "createInvoiceDraft"
   | "createCustomer"
@@ -63,7 +64,8 @@ WRITE  (requiresConfirmation: true — user MUST confirm before execution)
   createCustomer   → user wants to add a new customer
   recordDebt       → user says someone owes them money
   settleDebt       → user says a customer paid/settled debt
-  deleteZeroStockProducts → user wants to delete all products with 0 stock
+  deleteProduct    → user wants to delete/remove ONE specific product by name
+  deleteZeroStockProducts → user wants to delete ALL products with 0 stock
   createInvoiceDraft → user wants to generate an invoice
 
 FALLBACK
@@ -124,6 +126,12 @@ For settleDebt — extract:
     "Blessing don clear her debt" → {"customerName":"Blessing","amount":null}
     "everyone has paid up" → {"settleAll":true,"amount":null}
 
+For deleteProduct — extract:
+  { "productName": string }
+  The name is the product to remove, WITHOUT the command word ("delete"/"remove").
+  Examples: "delete black tee" → {"productName":"black tee"};
+            "remove the rice product" → {"productName":"rice"}
+
 For getStockLevel — extract:
   { "productName": string }
   Examples: "how many black tee remain" → {"productName":"black tee"};
@@ -155,6 +163,7 @@ OUTPUT FORMAT  — valid JSON only, no markdown, no code fences
 const WRITE_TOOLS: ToolName[] = [
   "recordSale",
   "createProduct",
+  "deleteProduct",
   "deleteZeroStockProducts",
   "createCustomer",
   "recordDebt",
@@ -497,6 +506,19 @@ export class AiService {
       };
     }
 
+    // "delete/remove <product>" — a specific product (zero-stock handled above).
+    // The executor resolves the actual product name and confirms not-found.
+    if (/^\s*(?:please\s+)?(?:delete|remove|drop)\b/.test(m)) {
+      return {
+        intent: "INVENTORY_DELETE",
+        confidence: 0.8,
+        toolName: "deleteProduct",
+        parameters: { sourceText: message },
+        requiresConfirmation: true,
+        response: "Delete this product? Reply YES to confirm or NO to cancel.",
+      };
+    }
+
     return null;
   }
 
@@ -577,7 +599,7 @@ export class AiService {
     const ALL_TOOLS: ToolName[] = [
       "getStockLevel", "recordSale", "listProducts", "listTopDebtors",
       "debtSummary", "todaySales", "lowStockAlert", "listCustomers",
-      "createProduct", "deleteZeroStockProducts", "createInvoiceDraft",
+      "createProduct", "deleteProduct", "deleteZeroStockProducts", "createInvoiceDraft",
       "createCustomer", "recordDebt", "settleDebt", "unknown",
     ];
 

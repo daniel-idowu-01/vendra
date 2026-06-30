@@ -172,6 +172,27 @@ export class ActionExecutorService {
           ].join("\n");
         }
 
+        case "deleteProduct": {
+          const productName =
+            this.optionalString(parameters, ["productName", "name"]) ??
+            this.stripDeleteCommand(String(parameters.sourceText ?? ""));
+          if (!productName) {
+            return "Which product should I delete? Reply with the product name.";
+          }
+
+          const result = await this.inventory.deleteProductByName(organizationId, productName);
+          if (result.status === "not_found") {
+            return `I couldn't find a product named *${productName}*. Reply *show products* to see your list.`;
+          }
+          if (result.status === "ambiguous") {
+            const lines = result.candidates
+              .map((c) => `• ${c.name}${c.sku ? ` (SKU: ${c.sku})` : ""}`)
+              .join("\n");
+            return `More than one product matches *${productName}*. Which one?\n${lines}\n\nReply with the exact name.`;
+          }
+          return `🗑️ Deleted *${result.product.name}* from your inventory.`;
+        }
+
         case "deleteZeroStockProducts": {
           const result = await this.inventory.deleteZeroStockProducts(organizationId);
           if (result.count === 0) {
@@ -607,6 +628,17 @@ export class ActionExecutorService {
       }
     }
     return items;
+  }
+
+  // Fallback for when the LLM didn't isolate the product name: strip the
+  // leading delete/remove command and product noun from the raw text.
+  private stripDeleteCommand(text: string): string {
+    return text
+      .replace(/^\s*(?:please\s+)?(?:delete|remove|clear|drop)\s+/i, "")
+      .replace(/\b(the|a|an)\b/gi, " ")
+      .replace(/\b(products?|items?)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private extractAvailabilityProduct(text: string): string {
