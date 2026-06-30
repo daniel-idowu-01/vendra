@@ -126,6 +126,17 @@ For settleDebt — extract:
     "Blessing don clear her debt" → {"customerName":"Blessing","amount":null}
     "everyone has paid up" → {"settleAll":true,"amount":null}
 
+For createInvoiceDraft — extract:
+  { "customerName": string | null, "items": [{ "name": string, "quantity": number, "unitPrice": number }] }
+  - "customerName" is who the invoice is for (null if none mentioned).
+  - "items" are the things billed; same shape as recordSale.
+  - If a unitPrice is not stated, omit it — the saved product price is used.
+  Examples:
+    "invoice Emeka for 3 bags of rice at 5000 each" →
+      {"customerName":"Emeka","items":[{"name":"rice","quantity":3,"unitPrice":5000}]}
+    "bill Mama Nkechi for 2 cartons of milk and 5 bread" →
+      {"customerName":"Mama Nkechi","items":[{"name":"milk","quantity":2},{"name":"bread","quantity":5}]}
+
 For deleteProduct — extract:
   { "productName": string }
   The name is the product to remove, WITHOUT the command word ("delete"/"remove").

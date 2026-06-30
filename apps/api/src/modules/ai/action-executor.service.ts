@@ -4,6 +4,7 @@ import { AnalyticsService } from "../analytics/analytics.service";
 import { CustomersService } from "../customers/customers.service";
 import { DebtsService } from "../debts/debts.service";
 import { InventoryService } from "../inventory/inventory.service";
+import { InvoicingService } from "../invoicing/invoicing.service";
 import { type ProposedAction } from "./ai.service";
 
 interface SaleItem {
@@ -19,7 +20,8 @@ export class ActionExecutorService {
     private readonly inventory: InventoryService,
     private readonly debts: DebtsService,
     private readonly analytics: AnalyticsService,
-    private readonly customers: CustomersService
+    private readonly customers: CustomersService,
+    private readonly invoicing: InvoicingService
   ) {}
 
   async execute(organizationId: string, action: ProposedAction): Promise<string> {
@@ -350,10 +352,7 @@ export class ActionExecutorService {
         }
 
         case "createInvoiceDraft": {
-          // Placeholder — extend when invoice domain service is ready
-          return (
-            "🧾 Invoice drafting is coming soon. For now, you can record the sale and share the details with your customer manually."
-          );
+          return await this.handleCreateInvoice(organizationId, parameters);
         }
 
         case "unknown":
@@ -479,7 +478,90 @@ export class ActionExecutorService {
     );
   }
 
-  
+  // ─────────────────────────────────────────────────────────────────────────
+  // Invoice generation
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private async handleCreateInvoice(
+    organizationId: string,
+    parameters: Record<string, unknown>
+  ): Promise<string> {
+    // Gather the line items (structured array from the LLM, else parse text).
+    let rawItems: SaleItem[] = [];
+    if (Array.isArray(parameters.items) && parameters.items.length > 0) {
+      rawItems = this.parseStructuredItems(parameters.items);
+    } else {
+      rawItems = this.parseSaleText(String(parameters.sourceText ?? parameters.items ?? ""));
+    }
+    if (rawItems.length === 0) {
+      return (
+        "⚠️ I couldn't read the invoice items. Try:\n" +
+        "`invoice [customer] for [qty] [product] at [price]`\n" +
+        "Example: `invoice Emeka for 3 bags of rice at 5000`"
+      );
+    }
+
+    // Price each item: use the stated price, else the saved product price.
+    // Unlike a sale, an invoice is a billing document — it does not touch stock.
+    const items: { productId?: string; name: string; quantity: number; unitPrice: number }[] = [];
+    const skipped: string[] = [];
+    for (const item of rawItems) {
+      const product = await this.prisma.product.findFirst({
+        where: { organizationId, isActive: true, name: { equals: item.name, mode: "insensitive" } }
+      });
+      const unitPrice =
+        item.unitPrice && item.unitPrice > 0 ? item.unitPrice : Number(product?.sellingPrice ?? 0);
+      if (unitPrice <= 0) {
+        skipped.push(`  - ${item.name}: no price given and none saved. Add a price.`);
+        continue;
+      }
+      items.push({
+        productId: product?.id,
+        name: product?.name ?? item.name,
+        quantity: item.quantity,
+        unitPrice
+      });
+    }
+    if (items.length === 0) {
+      return "⚠️ Could not price any invoice items. Add a price, e.g. *2 bags at 5000*.";
+    }
+
+    // Resolve the customer (find or create by name). Invoices may be customerless.
+    const customerName = this.optionalString(parameters, ["customerName", "customer", "name"]);
+    let customerId: string | undefined;
+    let customerLabel = "Walk-in (no customer)";
+    if (customerName) {
+      let customer = await this.prisma.customer.findFirst({
+        where: { organizationId, name: { equals: customerName, mode: "insensitive" } }
+      });
+      if (!customer) {
+        customer = await this.prisma.customer.create({
+          data: { organizationId, name: customerName }
+        });
+      }
+      customerId = customer.id;
+      customerLabel = customer.name;
+    }
+
+    const invoice = await this.invoicing.createDraft(organizationId, { customerId, items });
+
+    const lines = invoice.items.map(
+      (it) =>
+        `• ${it.quantity} x ${it.name} @ ₦${Number(it.unitPrice).toLocaleString("en-NG")} = ₦${Number(it.totalAmount).toLocaleString("en-NG")}`
+    );
+    const skippedBlock = skipped.length > 0 ? `\n\n⚠️ Skipped:\n${skipped.join("\n")}` : "";
+
+    return (
+      `🧾 *Invoice ${invoice.invoiceNumber}*\n` +
+      `Customer: ${customerLabel}\n\n` +
+      `${lines.join("\n")}\n\n` +
+      `*Total: ₦${Number(invoice.totalAmount).toLocaleString("en-NG")}*\n` +
+      `Status: ${invoice.status}` +
+      skippedBlock
+    );
+  }
+
+
   private requireString(
     params: Record<string, unknown>,
     keys: string[],
