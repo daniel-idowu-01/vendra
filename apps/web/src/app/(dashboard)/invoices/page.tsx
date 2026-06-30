@@ -20,6 +20,7 @@ export default function InvoicesPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [customerId, setCustomerId] = useState("");
   const [items, setItems] = useState<DraftItem[]>([emptyItem()]);
+  const [formError, setFormError] = useState("");
 
   const invoiceList = invoices ?? [];
   const customerList = customers ?? [];
@@ -28,6 +29,7 @@ export default function InvoicesPage() {
   const total = validItems.reduce((sum, i) => sum + i.quantity * Number(i.unitPrice), 0);
 
   const updateItem = (index: number, patch: Partial<DraftItem>) => {
+    setFormError("");
     setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   };
   const addItem = () => setItems((prev) => [...prev, emptyItem()]);
@@ -38,10 +40,16 @@ export default function InvoicesPage() {
     setShowCreate(false);
     setCustomerId("");
     setItems([emptyItem()]);
+    setFormError("");
   };
 
   const handleCreate = async () => {
-    if (validItems.length === 0) return;
+    if (validItems.length === 0) {
+      setFormError("Add an item name, quantity, and price before creating the invoice.");
+      return;
+    }
+
+    setFormError("");
     try {
       await createInvoice.mutateAsync({
         customerId: customerId || undefined,
@@ -85,6 +93,12 @@ export default function InvoicesPage() {
             </div>
           )}
 
+          {formError && (
+            <div role="alert" className="rounded-xl bg-yellow-900/20 p-3 text-sm text-yellow-400">
+              {formError}
+            </div>
+          )}
+
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">Customer (optional)</label>
             <select
@@ -105,26 +119,32 @@ export default function InvoicesPage() {
           <div className="space-y-2">
             <label className="block text-xs text-muted-foreground">Items</label>
             {items.map((item, index) => (
-              <div key={index} className="flex items-center gap-2">
+              <div
+                key={index}
+                className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_2.5rem] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_7rem_2.5rem]"
+              >
                 <input
-                  className="input-surface min-w-0 flex-1"
+                  className="input-surface col-span-3 min-w-0 sm:col-span-1"
                   placeholder="Item name"
+                  aria-label={`Item ${index + 1} name`}
                   value={item.name}
                   onChange={(e) => updateItem(index, { name: e.target.value })}
                 />
                 <input
-                  className="input-surface w-16"
+                  className="input-surface min-w-0"
                   type="number"
                   min={1}
                   placeholder="Qty"
+                  aria-label={`Item ${index + 1} quantity`}
                   value={item.quantity}
                   onChange={(e) => updateItem(index, { quantity: Number(e.target.value) })}
                 />
                 <input
-                  className="input-surface w-24"
+                  className="input-surface min-w-0"
                   type="number"
                   min={0}
                   placeholder="Price"
+                  aria-label={`Item ${index + 1} price`}
                   value={item.unitPrice}
                   onChange={(e) => updateItem(index, { unitPrice: e.target.value })}
                 />
@@ -156,7 +176,7 @@ export default function InvoicesPage() {
           <div className="flex gap-2">
             <Button
               onClick={handleCreate}
-              disabled={createInvoice.isPending || validItems.length === 0}
+              disabled={createInvoice.isPending}
               className="flex-1"
             >
               {createInvoice.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
