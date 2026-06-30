@@ -4,6 +4,7 @@ import { AnalyticsService } from "../analytics/analytics.service";
 import { CustomersService } from "../customers/customers.service";
 import { DebtsService } from "../debts/debts.service";
 import { InventoryService } from "../inventory/inventory.service";
+import { InvoicingService } from "../invoicing/invoicing.service";
 import { type ProposedAction } from "./ai.service";
 
 interface SaleItem {
@@ -19,7 +20,8 @@ export class ActionExecutorService {
     private readonly inventory: InventoryService,
     private readonly debts: DebtsService,
     private readonly analytics: AnalyticsService,
-    private readonly customers: CustomersService
+    private readonly customers: CustomersService,
+    private readonly invoicing: InvoicingService
   ) {}
 
   async execute(organizationId: string, action: ProposedAction): Promise<string> {
@@ -141,9 +143,19 @@ export class ActionExecutorService {
 
         case "createProduct": {
           const parsedProduct = this.parseProductText(String(parameters.sourceText ?? ""));
-          const name = this.optionalString(parameters, ["name", "productName"]) ?? parsedProduct.name ??
-            this.requireString(parameters, ["name", "productName"], "product name");
-          const price = this.requireNumber(parameters, ["sellingPrice", "price", "amount"]) ?? parsedProduct.price ?? 0;
+          // Prefer explicit params (from the LLM); fall back to the text parser.
+          // Use optionalNumber (not requireNumber) so we don't blindly grab the
+          // first number in the sentence as the price — that's how "20 pieces"
+          // became a ₦20 price.
+          const name =
+            this.optionalString(parameters, ["name", "productName"]) ?? parsedProduct.name;
+          if (!name) {
+            return "⚠️ I couldn't catch the product name. Try: *add product <name> <price> qty <count>* — e.g. *add product Black tee 20000 qty 20*.";
+          }
+          const price =
+            this.optionalNumber(parameters, ["sellingPrice", "price", "amount"]) ??
+            parsedProduct.price ??
+            0;
           const initialQuantity =
             this.optionalNumber(parameters, ["initialQuantity", "quantity", "qty", "stockCount", "stock"]) ??
             parsedProduct.initialQuantity ??
@@ -160,6 +172,27 @@ export class ActionExecutorService {
             `Price: NGN ${Number(product.sellingPrice).toLocaleString("en-NG")} per ${product.unit}`,
             `Opening stock: ${initialQuantity.toLocaleString("en-NG")} ${product.unit}`
           ].join("\n");
+        }
+
+        case "deleteProduct": {
+          const productName =
+            this.optionalString(parameters, ["productName", "name"]) ??
+            this.stripDeleteCommand(String(parameters.sourceText ?? ""));
+          if (!productName) {
+            return "Which product should I delete? Reply with the product name.";
+          }
+
+          const result = await this.inventory.deleteProductByName(organizationId, productName);
+          if (result.status === "not_found") {
+            return `I couldn't find a product named *${productName}*. Reply *show products* to see your list.`;
+          }
+          if (result.status === "ambiguous") {
+            const lines = result.candidates
+              .map((c) => `• ${c.name}${c.sku ? ` (SKU: ${c.sku})` : ""}`)
+              .join("\n");
+            return `More than one product matches *${productName}*. Which one?\n${lines}\n\nReply with the exact name.`;
+          }
+          return `🗑️ Deleted *${result.product.name}* from your inventory.`;
         }
 
         case "deleteZeroStockProducts": {
@@ -224,12 +257,24 @@ export class ActionExecutorService {
             if (openDebts.length === 0) return "✅ No outstanding debts to settle.";
 
             const totalOutstanding = openDebts.reduce((s, d) => s + Number(d.outstanding), 0);
-            for (const debt of openDebts) {
-              await this.prisma.debtRecord.update({
-                where: { id: debt.id },
-                data: { outstanding: 0, status: "PAID" }
-              });
-            }
+            // All-or-nothing: clear every debt and log a payment for each, in one
+            // transaction so a mid-way failure can't leave debts half-settled.
+            await this.prisma.$transaction(async (tx) => {
+              for (const debt of openDebts) {
+                await tx.debtPayment.create({
+                  data: {
+                    organizationId,
+                    debtRecordId: debt.id,
+                    amount: debt.outstanding,
+                    note: "Settled via WhatsApp (all debts)"
+                  }
+                });
+                await tx.debtRecord.update({
+                  where: { id: debt.id },
+                  data: { outstanding: 0, status: "PAID" }
+                });
+              }
+            });
             return `✅ *All debts settled*\nTotal cleared: ₦${totalOutstanding.toLocaleString("en-NG")}`;
           }
 
@@ -250,12 +295,22 @@ export class ActionExecutorService {
           const totalOutstanding = openDebts.reduce((s, d) => s + Number(d.outstanding), 0);
 
           if (amount === null || amount >= totalOutstanding) {
-            for (const debt of openDebts) {
-              await this.prisma.debtRecord.update({
-                where: { id: debt.id },
-                data: { outstanding: 0, status: "PAID" }
-              });
-            }
+            await this.prisma.$transaction(async (tx) => {
+              for (const debt of openDebts) {
+                await tx.debtPayment.create({
+                  data: {
+                    organizationId,
+                    debtRecordId: debt.id,
+                    amount: debt.outstanding,
+                    note: "Settled via WhatsApp (full payment)"
+                  }
+                });
+                await tx.debtRecord.update({
+                  where: { id: debt.id },
+                  data: { outstanding: 0, status: "PAID" }
+                });
+              }
+            });
             return `✅ *Debt settled*\nCustomer: ${customer.name}\nAmount: ₦${totalOutstanding.toLocaleString("en-NG")}\nStatus: Fully paid`;
           }
 
@@ -263,18 +318,30 @@ export class ActionExecutorService {
             return "⚠️ Amount paid must be greater than 0.";
           }
 
-          let remaining = amount;
-          for (const debt of openDebts) {
-            if (remaining <= 0) break;
-            const current = Number(debt.outstanding);
-            const paid = Math.min(current, remaining);
-            const nextOutstanding = current - paid;
-            await this.prisma.debtRecord.update({
-              where: { id: debt.id },
-              data: { outstanding: nextOutstanding, status: nextOutstanding <= 0 ? "PAID" : "PARTIALLY_PAID" }
-            });
-            remaining -= paid;
-          }
+          // Partial payment: apply across oldest debts first, recording a
+          // DebtPayment for each portion, all within a single transaction.
+          await this.prisma.$transaction(async (tx) => {
+            let remaining = amount;
+            for (const debt of openDebts) {
+              if (remaining <= 0) break;
+              const current = Number(debt.outstanding);
+              const paid = Math.min(current, remaining);
+              const nextOutstanding = current - paid;
+              await tx.debtPayment.create({
+                data: {
+                  organizationId,
+                  debtRecordId: debt.id,
+                  amount: paid,
+                  note: "Partial payment via WhatsApp"
+                }
+              });
+              await tx.debtRecord.update({
+                where: { id: debt.id },
+                data: { outstanding: nextOutstanding, status: nextOutstanding <= 0 ? "PAID" : "PARTIALLY_PAID" }
+              });
+              remaining -= paid;
+            }
+          });
 
           const newOutstanding = Math.max(totalOutstanding - amount, 0);
           return `✅ *Debt payment recorded*\nCustomer: ${customer.name}\nPaid: ₦${amount.toLocaleString("en-NG")}\nOutstanding: ₦${newOutstanding.toLocaleString("en-NG")}`;
@@ -285,10 +352,7 @@ export class ActionExecutorService {
         }
 
         case "createInvoiceDraft": {
-          // Placeholder — extend when invoice domain service is ready
-          return (
-            "🧾 Invoice drafting is coming soon. For now, you can record the sale and share the details with your customer manually."
-          );
+          return await this.handleCreateInvoice(organizationId, parameters);
         }
 
         case "unknown":
@@ -401,16 +465,9 @@ export class ActionExecutorService {
       return "⚠️ Could not record any items. Please try again.";
     }
 
-    // Create a single payment record for the whole transaction
-    await this.prisma.payment.create({
-      data: {
-        organizationId,
-        provider: "MANUAL",
-        amount: totalAmount,
-        paidAt: new Date(),
-        metadata: { source: "whatsapp_ai", items: recordedLines }
-      }
-    });
+    // Note: inventory.recordTransaction already writes a SALE Payment per item,
+    // so we must NOT create an additional aggregate payment here or revenue
+    // would be double-counted in analytics.
 
     const errorBlock = errors.length > 0 ? `\n\n⚠️ Failed items:\n${errors.join("\n")}` : "";
 
@@ -421,7 +478,90 @@ export class ActionExecutorService {
     );
   }
 
-  
+  // ─────────────────────────────────────────────────────────────────────────
+  // Invoice generation
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private async handleCreateInvoice(
+    organizationId: string,
+    parameters: Record<string, unknown>
+  ): Promise<string> {
+    // Gather the line items (structured array from the LLM, else parse text).
+    let rawItems: SaleItem[] = [];
+    if (Array.isArray(parameters.items) && parameters.items.length > 0) {
+      rawItems = this.parseStructuredItems(parameters.items);
+    } else {
+      rawItems = this.parseSaleText(String(parameters.sourceText ?? parameters.items ?? ""));
+    }
+    if (rawItems.length === 0) {
+      return (
+        "⚠️ I couldn't read the invoice items. Try:\n" +
+        "`invoice [customer] for [qty] [product] at [price]`\n" +
+        "Example: `invoice Emeka for 3 bags of rice at 5000`"
+      );
+    }
+
+    // Price each item: use the stated price, else the saved product price.
+    // Unlike a sale, an invoice is a billing document — it does not touch stock.
+    const items: { productId?: string; name: string; quantity: number; unitPrice: number }[] = [];
+    const skipped: string[] = [];
+    for (const item of rawItems) {
+      const product = await this.prisma.product.findFirst({
+        where: { organizationId, isActive: true, name: { equals: item.name, mode: "insensitive" } }
+      });
+      const unitPrice =
+        item.unitPrice && item.unitPrice > 0 ? item.unitPrice : Number(product?.sellingPrice ?? 0);
+      if (unitPrice <= 0) {
+        skipped.push(`  - ${item.name}: no price given and none saved. Add a price.`);
+        continue;
+      }
+      items.push({
+        productId: product?.id,
+        name: product?.name ?? item.name,
+        quantity: item.quantity,
+        unitPrice
+      });
+    }
+    if (items.length === 0) {
+      return "⚠️ Could not price any invoice items. Add a price, e.g. *2 bags at 5000*.";
+    }
+
+    // Resolve the customer (find or create by name). Invoices may be customerless.
+    const customerName = this.optionalString(parameters, ["customerName", "customer", "name"]);
+    let customerId: string | undefined;
+    let customerLabel = "Walk-in (no customer)";
+    if (customerName) {
+      let customer = await this.prisma.customer.findFirst({
+        where: { organizationId, name: { equals: customerName, mode: "insensitive" } }
+      });
+      if (!customer) {
+        customer = await this.prisma.customer.create({
+          data: { organizationId, name: customerName }
+        });
+      }
+      customerId = customer.id;
+      customerLabel = customer.name;
+    }
+
+    const invoice = await this.invoicing.createDraft(organizationId, { customerId, items });
+
+    const lines = invoice.items.map(
+      (it) =>
+        `• ${it.quantity} x ${it.name} @ ₦${Number(it.unitPrice).toLocaleString("en-NG")} = ₦${Number(it.totalAmount).toLocaleString("en-NG")}`
+    );
+    const skippedBlock = skipped.length > 0 ? `\n\n⚠️ Skipped:\n${skipped.join("\n")}` : "";
+
+    return (
+      `🧾 *Invoice ${invoice.invoiceNumber}*\n` +
+      `Customer: ${customerLabel}\n\n` +
+      `${lines.join("\n")}\n\n` +
+      `*Total: ₦${Number(invoice.totalAmount).toLocaleString("en-NG")}*\n` +
+      `Status: ${invoice.status}` +
+      skippedBlock
+    );
+  }
+
+
   private requireString(
     params: Record<string, unknown>,
     keys: string[],
@@ -482,6 +622,18 @@ export class ActionExecutorService {
     return undefined;
   }
 
+  // Unit nouns that may follow a quantity, e.g. "20 pieces", "3 cartons".
+  private static readonly UNIT_NOUNS =
+    "pieces?|pcs?|units?|pairs?|bags?|cartons?|packs?|dozens?|bottles?|boxes?|cans?|crates?|rolls?|sets?|sachets?|tins?|kg|g|litres?|liters?|l|ml";
+
+  /**
+   * Best-effort extraction of { name, price, initialQuantity } from a free-text
+   * product description. Handles both terse commands ("add product Rice 5000
+   * qty 10") and conversational phrasing ("we just got a new black tee. we got
+   * 20 pieces for 20000 per quantity"). This is a fallback for when the LLM
+   * doesn't return structured params — it must never confuse a quantity for a
+   * price, so quantity is resolved first and removed before reading the price.
+   */
   private parseProductText(source: string): {
     name?: string;
     price?: number;
@@ -491,18 +643,44 @@ export class ActionExecutorService {
     if (!text) return {};
 
     const normalized = text.replace(/,/g, "");
-    const stockMatch = normalized.match(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*(\d+)\b/i);
-    const textWithoutStock = normalized.replace(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*\d+\b/gi, "");
-    const priceMatch = textWithoutStock.match(/(?:price\s*)?(?:ngn|n|₦|#)?\s*(\d+(?:\.\d+)?)/i);
-    const price = priceMatch ? parseFloat(priceMatch[1]) : undefined;
-    const initialQuantity = stockMatch ? parseInt(stockMatch[1], 10) : undefined;
+    const units = ActionExecutorService.UNIT_NOUNS;
 
-    const name = text
-      .replace(/\b(add|create|new)\b/gi, "")
-      .replace(/\b(products?|items?)\b/gi, "")
-      .replace(/\b(?:qty|quantity|stock|count|units?)\s*(?:is|of|:)?\s*\d+\b/gi, "")
-      .replace(/(?:price\s*)?(?:ngn|n|₦|#)?\s*[\d,]+(?:\.\d+)?/i, "")
-      .replace(/\b(?:for|at|@|each|per)\b/gi, "")
+    // --- quantity ---
+    // 1) keyword form: "qty 10", "quantity: 10", "stock of 30"
+    // 2) number + unit noun: "20 pieces", "3 cartons"
+    const qtyKeyword = normalized.match(/\b(?:qty|quantity|stock|count)\s*(?:is|of|:|=)?\s*(\d+)\b/i);
+    const qtyWithUnit = normalized.match(new RegExp(`\\b(\\d+)\\s*(?:${units})\\b`, "i"));
+    const qtyMatch = qtyKeyword ?? qtyWithUnit;
+    const initialQuantity = qtyMatch ? parseInt(qtyMatch[1], 10) : undefined;
+
+    // Remove the quantity clause so it can't be misread as the price.
+    const withoutQty = normalized
+      .replace(/\b(?:qty|quantity|stock|count)\s*(?:is|of|:|=)?\s*\d+\b/gi, " ")
+      .replace(new RegExp(`\\b\\d+\\s*(?:${units})\\b`, "gi"), " ");
+
+    // --- price ---
+    // 1) currency / "price" marker, or "for/at/@ <num>"
+    // 2) otherwise the first remaining number
+    const priceMarker =
+      withoutQty.match(/(?:₦|#|ngn|price\s*(?:is|:)?)\s*(\d+(?:\.\d+)?)/i) ??
+      withoutQty.match(/\b(?:for|at|@)\s*(?:₦|#|ngn)?\s*(\d+(?:\.\d+)?)/i);
+    const priceFallback = withoutQty.match(/\b(\d+(?:\.\d+)?)\b/);
+    const priceStr = (priceMarker ?? priceFallback)?.[1];
+    const price = priceStr ? parseFloat(priceStr) : undefined;
+
+    // --- name ---
+    const name = normalized
+      .replace(/\b(add|create|new|product|products|item|items)\b/gi, " ")
+      .replace(/\b(?:we|i)\s+(?:just\s+)?(?:got|have|had|bought|received|added|get)\b/gi, " ")
+      .replace(/\b(just|some|a|an|the|of)\b/gi, " ")
+      .replace(new RegExp(`\\b\\d+\\s*(?:${units})\\b`, "gi"), " ")
+      .replace(/\b(?:qty|quantity|stock|count)\s*(?:is|of|:|=)?\s*\d+\b/gi, " ")
+      .replace(/\b(?:for|at|@)\s*(?:₦|#|ngn)?\s*\d+(?:\.\d+)?\b/gi, " ")
+      .replace(/(?:₦|#|ngn|price)\s*\d+(?:\.\d+)?/gi, " ")
+      .replace(/\bper\s+(?:quantity|unit|piece|item)\b/gi, " ")
+      .replace(/\b(each|per)\b/gi, " ")
+      .replace(/[.,!?]+/g, " ")
+      .replace(/\b\d+(?:\.\d+)?\b/g, " ")
       .replace(/\s+/g, " ")
       .trim();
 
@@ -532,6 +710,17 @@ export class ActionExecutorService {
       }
     }
     return items;
+  }
+
+  // Fallback for when the LLM didn't isolate the product name: strip the
+  // leading delete/remove command and product noun from the raw text.
+  private stripDeleteCommand(text: string): string {
+    return text
+      .replace(/^\s*(?:please\s+)?(?:delete|remove|clear|drop)\s+/i, "")
+      .replace(/\b(the|a|an)\b/gi, " ")
+      .replace(/\b(products?|items?)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private extractAvailabilityProduct(text: string): string {

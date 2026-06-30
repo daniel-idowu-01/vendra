@@ -23,7 +23,7 @@ async function listenWithRetry(app: INestApplication, port: number, maxRetries =
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, rawBody: true });
   const config = app.get(ConfigService);
 
   app.use(helmet());

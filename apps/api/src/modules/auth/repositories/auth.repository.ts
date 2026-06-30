@@ -14,6 +14,28 @@ export class AuthRepository {
     return this.prisma.user.findUnique({ where: { email } });
   }
 
+  findUserById(id: string) {
+    return this.prisma.user.findUnique({ where: { id } });
+  }
+
+  createRefreshToken(
+    data: { userId: string; tokenHash: string; expiresAt: Date },
+    tx?: Prisma.TransactionClient
+  ) {
+    return this.db(tx).refreshToken.create({ data });
+  }
+
+  findRefreshTokenById(id: string) {
+    return this.prisma.refreshToken.findUnique({ where: { id } });
+  }
+
+  revokeRefreshTokenById(id: string, tx?: Prisma.TransactionClient) {
+    return this.db(tx).refreshToken.update({
+      where: { id },
+      data: { revokedAt: new Date() }
+    });
+  }
+
   createUser(data: Prisma.UserCreateInput, tx?: Prisma.TransactionClient) {
     return this.db(tx).user.create({ data });
   }

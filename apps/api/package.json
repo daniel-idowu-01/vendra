@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "powershell -NoLogo -Command \"netstat -ano | Select-String ':4000' | ForEach-Object { $t = $_ -split '\\s+'; $p = $t[$t.Count-1]; if ($p -match '^\\d+$') { Stop-Process -Id $p -Force } }\"",
+    "predev": "powershell -NoLogo -NoProfile -Command \"Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }; exit 0\"",
     "dev": "nest start --watch",
     "build": "nest build",
     "start": "node dist/main.js",

@@ -63,6 +63,7 @@ async function fetchWithAuth<T>(path: string, init: RequestInit, allowRefresh: b
 
   const response = await fetch(`${API_URL}/api/v1${path}`, {
     ...init,
+    credentials: "include",
     headers: { ...headers, ...(init.headers as Record<string, string> | undefined) }
   });
 
@@ -87,14 +88,13 @@ async function refreshSession() {
 }
 
 async function doRefreshSession() {
-  const { refreshToken } = useAuthStore.getState();
-  if (!refreshToken) return false;
-
   try {
+    // The refresh token lives in an httpOnly cookie; `credentials: "include"`
+    // sends it. Nothing is read from JS-accessible storage.
     const response = await fetch(`${API_URL}/api/v1/auth/refresh`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ refreshToken })
+      credentials: "include",
+      headers: { "content-type": "application/json" }
     });
 
     if (!response.ok) return false;

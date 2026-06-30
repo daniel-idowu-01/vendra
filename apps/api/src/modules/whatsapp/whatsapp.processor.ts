@@ -9,6 +9,7 @@ import { AiRepository } from "../ai/repositories/ai.repository";
 import { WhatsAppRepository } from "./repositories/whatsapp.repository";
 import { WhatsAppService } from "./whatsapp.service";
 import { InventoryService } from "../inventory/inventory.service";
+import { normalizePhone } from "../../common/utils/phone";
 
 type InboundPayload = {
   payload?: {
@@ -91,18 +92,32 @@ export class WhatsAppProcessor extends WorkerHost {
 
       this.logger.debug(`Inbound from ${from}: "${text}"`);
 
-      // Resolve organisation from the sender's linked identity
+      // Resolve organisation strictly from the sender's linked identity.
+      // Never fall back to an arbitrary organisation — a message from any
+      // number would otherwise mutate some unrelated tenant's data.
+      // Look up by the canonical phone form so dashboard-entered numbers
+      // (e.g. "+2349028686300") match WhatsApp's "from" (e.g. "2349028686300").
       const identity = await this.prisma.whatsAppIdentity.findUnique({
-        where: { phone: from },
+        where: { phone: normalizePhone(from) },
       });
-      const organization = identity
-        ? await this.prisma.organization.findUnique({
-            where: { id: identity.organizationId },
-          })
-        : await this.whatsappRepo.findFirstOrganization();
+
+      if (!identity) {
+        this.logger.warn(`Inbound from unlinked number ${from} — rejecting`);
+        await this.whatsapp.sendRawText(
+          phoneNumberId,
+          from,
+          "This number isn't linked to a Vendra workspace yet. Log in to the Vendra dashboard and link your WhatsApp number to get started."
+        );
+        await this.whatsappRepo.markWebhookEventProcessed(event.id);
+        return;
+      }
+
+      const organization = await this.prisma.organization.findUnique({
+        where: { id: identity.organizationId },
+      });
 
       if (!organization) {
-        this.logger.warn("No organisation found for inbound message");
+        this.logger.warn("Linked identity points to a missing organisation");
         await this.whatsappRepo.markWebhookEventProcessed(event.id);
         return;
       }

@@ -186,6 +186,61 @@ export class InventoryService {
     }
   }
 
+  /**
+   * Soft-delete a single product by name (sets isActive=false). Matches an exact
+   * name first, then a unique partial match. Returns an explicit status so the
+   * caller can react to "not found" or "ambiguous" without deleting the wrong
+   * product — important because this is destructive.
+   */
+  async deleteProductByName(organizationId: string, rawName: string): Promise<
+    | { status: "not_found" }
+    | { status: "ambiguous"; candidates: Array<{ id: string; name: string; sku: string | null }> }
+    | { status: "deleted"; product: { id: string; name: string } }
+  > {
+    try {
+      const name = rawName.trim();
+      if (!name) throw new BadRequestException("Product name is required.");
+
+      let product = await this.prisma.product.findFirst({
+        where: { organizationId, isActive: true, name: { equals: name, mode: "insensitive" } }
+      });
+
+      if (!product) {
+        const matches = await this.prisma.product.findMany({
+          where: { organizationId, isActive: true, name: { contains: name, mode: "insensitive" } },
+          take: 6,
+          orderBy: { name: "asc" }
+        });
+        if (matches.length === 0) return { status: "not_found" };
+        if (matches.length > 1) {
+          return {
+            status: "ambiguous",
+            candidates: matches.map((p) => ({ id: p.id, name: p.name, sku: p.sku }))
+          };
+        }
+        product = matches[0];
+      }
+
+      await this.prisma.product.update({
+        where: { id: product.id },
+        data: { isActive: false }
+      });
+
+      await this.inventoryRepo.createAuditLog({
+        organizationId,
+        productId: product.id,
+        action: "DELETE",
+        metadata: { source: "whatsapp_ai", name: product.name }
+      });
+
+      return { status: "deleted", product: { id: product.id, name: product.name } };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      Logger.error("[InventoryService.deleteProductByName] Unexpected error:", error);
+      throw new InternalServerErrorException("Failed to delete product.");
+    }
+  }
+
   async importProductsFromSpreadsheet(
     organizationId: string,
     file: { buffer: Buffer; originalname?: string; mimetype?: string }
@@ -325,7 +380,23 @@ export class InventoryService {
           organizationId, dto.productId, dto.branchId, tx
         );
 
-        if (existingBatch) {
+        if (signedQuantity < 0) {
+          // Outflow (SALE/STOCK_OUT/TRANSFER): decrement atomically with a
+          // conditional write so two concurrent sales can never oversell. The
+          // `quantity >= needed` guard is evaluated at write time under the
+          // row lock, so a count of 0 means there isn't enough stock.
+          const needed = -signedQuantity;
+          if (!existingBatch) {
+            throw new BadRequestException("Insufficient stock for this product at the selected branch.");
+          }
+          const decremented = await tx.productBatch.updateMany({
+            where: { id: existingBatch.id, quantity: { gte: needed } },
+            data: { quantity: { decrement: needed } }
+          });
+          if (decremented.count === 0) {
+            throw new BadRequestException("Insufficient stock for this product at the selected branch.");
+          }
+        } else if (existingBatch) {
           await this.inventoryRepo.updateBatch(
             existingBatch.id,
             { quantity: { increment: signedQuantity } },

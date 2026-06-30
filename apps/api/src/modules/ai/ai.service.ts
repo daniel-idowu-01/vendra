@@ -26,6 +26,7 @@ export type ToolName =
   | "lowStockAlert"
   | "listCustomers"
   | "createProduct"
+  | "deleteProduct"
   | "deleteZeroStockProducts"
   | "createInvoiceDraft"
   | "createCustomer"
@@ -63,7 +64,8 @@ WRITE  (requiresConfirmation: true — user MUST confirm before execution)
   createCustomer   → user wants to add a new customer
   recordDebt       → user says someone owes them money
   settleDebt       → user says a customer paid/settled debt
-  deleteZeroStockProducts → user wants to delete all products with 0 stock
+  deleteProduct    → user wants to delete/remove ONE specific product by name
+  deleteZeroStockProducts → user wants to delete ALL products with 0 stock
   createInvoiceDraft → user wants to generate an invoice
 
 FALLBACK
@@ -72,28 +74,79 @@ FALLBACK
 ────────────────────────────────────────────────
 PARAMETER EXTRACTION RULES
 ────────────────────────────────────────────────
+Users phrase things freely (conversational, terse, Pidgin, typos, with or without
+₦/N, thousands like "20k" or "20,000"). Understand intent and extract what they
+MEAN, not just exact keywords. Normalise money: "5k"→5000, "1.5m"→1500000,
+"20,000"→20000. One message can contain multiple items.
+
 For recordSale — extract an "items" array:
   Each item: { "name": string, "quantity": number, "unitPrice": number }
-  Example: "sold 3 bags for 5000 each" → items: [{"name":"bags","quantity":3,"unitPrice":5000}]
+  - "quantity" is how many were sold; "unitPrice" is the price PER ONE.
+  - If the user gives a total, divide by quantity for unitPrice when obvious;
+    otherwise omit unitPrice and the system uses the product's saved price.
+  Examples:
+    "sold 3 bags for 5000 each" → [{"name":"bags","quantity":3,"unitPrice":5000}]
+    "I sell 2 crates of coke and 5 bread" →
+      [{"name":"coke","quantity":2},{"name":"bread","quantity":5}]
+    "comot 10 sachet milk 200 each" → [{"name":"sachet milk","quantity":10,"unitPrice":200}]
 
 For createProduct — extract:
   { "name": string, "sellingPrice": number, "unit": string, "initialQuantity": number }
+  - "name" is the product only, with conversational filler removed.
+  - "initialQuantity" is the stock count ("20 pieces", "we got 20" → 20).
+  - "sellingPrice" is the money amount ("for 20000", "₦20000 each" → 20000).
+  - NEVER swap quantity and price.
+  Example: "we just got a new black tee, 20 pieces for 20000 each" →
+    {"name":"black tee","initialQuantity":20,"sellingPrice":20000,"unit":"piece"}
   If price is missing, set sellingPrice to 0 and ask in response.
 
 For createCustomer — extract:
   { "name": string, "phone": string | null }
+  - Pull the person/business name; capture a phone number if present, else null.
+  Examples:
+    "add a customer called Mama Nkechi 08031234567" →
+      {"name":"Mama Nkechi","phone":"08031234567"}
+    "new client Emeka Stores" → {"name":"Emeka Stores","phone":null}
 
 For recordDebt — extract:
   { "customerName": string, "amount": number }
+  - "customerName" is who owes; "amount" is what they owe (normalise money).
+  Examples:
+    "Emeka owes me 15k" → {"customerName":"Emeka","amount":15000}
+    "put 2,500 on Blessing's account" → {"customerName":"Blessing","amount":2500}
+    "Tunde collect goods on credit" → {"customerName":"Tunde","amount":0} (ask for amount)
   If amount is missing, set amount to 0 and ask for it in response.
 
 For settleDebt — extract:
-  { "customerName": string, "amount": number | null }
-  If amount is missing or user says full payment, set amount to null.
-  IMPORTANT: Only set settleAll=true if the user explicitly says ALL debts or everyone.
+  { "customerName": string, "amount": number | null, "settleAll": boolean }
+  - "amount" is what they paid; set null for a full payment / "cleared everything".
+  - settleAll=true ONLY when the user clearly means EVERYONE / ALL customers.
+  Examples:
+    "Emeka paid 5000" → {"customerName":"Emeka","amount":5000}
+    "Blessing don clear her debt" → {"customerName":"Blessing","amount":null}
+    "everyone has paid up" → {"settleAll":true,"amount":null}
+
+For createInvoiceDraft — extract:
+  { "customerName": string | null, "items": [{ "name": string, "quantity": number, "unitPrice": number }] }
+  - "customerName" is who the invoice is for (null if none mentioned).
+  - "items" are the things billed; same shape as recordSale.
+  - If a unitPrice is not stated, omit it — the saved product price is used.
+  Examples:
+    "invoice Emeka for 3 bags of rice at 5000 each" →
+      {"customerName":"Emeka","items":[{"name":"rice","quantity":3,"unitPrice":5000}]}
+    "bill Mama Nkechi for 2 cartons of milk and 5 bread" →
+      {"customerName":"Mama Nkechi","items":[{"name":"milk","quantity":2},{"name":"bread","quantity":5}]}
+
+For deleteProduct — extract:
+  { "productName": string }
+  The name is the product to remove, WITHOUT the command word ("delete"/"remove").
+  Examples: "delete black tee" → {"productName":"black tee"};
+            "remove the rice product" → {"productName":"rice"}
 
 For getStockLevel — extract:
   { "productName": string }
+  Examples: "how many black tee remain" → {"productName":"black tee"};
+            "do you still get rice?" → {"productName":"rice"}
 
 ────────────────────────────────────────────────
 RESPONSE RULES
@@ -121,6 +174,7 @@ OUTPUT FORMAT  — valid JSON only, no markdown, no code fences
 const WRITE_TOOLS: ToolName[] = [
   "recordSale",
   "createProduct",
+  "deleteProduct",
   "deleteZeroStockProducts",
   "createCustomer",
   "recordDebt",
@@ -214,12 +268,18 @@ export class AiService {
     let proposed: ProposedAction;
     let provider = "unknown";
 
-    const deterministic = this.classifyDeterministic(message, history);
-    if (deterministic) {
-      proposed = deterministic;
-      provider = "deterministic";
+    // Stateful continuation: a bare quantity reply ("I want 5") to a previous
+    // availability question. This depends on conversation state rather than how
+    // the request is phrased, so we resolve it directly and skip the LLM.
+    const followUp = this.classifyConversationalFollowUp(message, history);
+    if (followUp) {
+      proposed = followUp;
+      provider = "follow-up";
     } else {
       try {
+        // The LLM is the PRIMARY understanding + extraction engine so users can
+        // phrase requests however they like (conversational, terse, multilingual,
+        // typos, etc.). HuggingFace first, Gemini as backup.
         if (this.huggingFaceApiKey) {
           proposed = await this.classifyWithHuggingFace(message, history);
           provider = "huggingface";
@@ -244,7 +304,12 @@ export class AiService {
             "[AiService] Secondary classification failed:",
             (secondaryErr as Error)?.message
           );
-          proposed = this.fallbackClassify(message);
+          // Offline / no-LLM safety net only: deterministic fast-paths, then
+          // regex heuristics. These are intentionally last-resort — the LLM
+          // handles the open-ended phrasing whenever it is reachable.
+          proposed =
+            this.classifyDeterministic(message, history) ??
+            this.fallbackClassify(message);
           provider = "fallback";
         }
       }
@@ -372,31 +437,49 @@ export class AiService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Deterministic fast-path (highest priority, no LLM needed)
+  // Conversational continuation (runs ahead of the LLM)
   // ─────────────────────────────────────────────────────────────────────────
 
-  private classifyDeterministic(
+  /**
+   * Resolve a bare quantity reply ("I want 5", "give me 3 units") that follows a
+   * previous availability question, turning it into a recordSale for the product
+   * the user just asked about. This is conversation-state driven, not phrasing
+   * driven, so it runs ahead of the LLM rather than as a fallback.
+   */
+  private classifyConversationalFollowUp(
     message: string,
     history: { role: string; content: string }[] = []
   ): ProposedAction | null {
     const m = message.toLowerCase().trim();
-
     const quantityFollowUp = m.match(/^(?:i\s*(?:want|need|will take|would like)|give me)\s+(\d+)\s*(?:units?|pieces?|pcs?)?$/i);
-    if (quantityFollowUp) {
-      const previousUserMessage = [...history].reverse().find((entry) => entry.role === "user")?.content ?? "";
-      const productName = this.extractProductFromAvailabilityQuestion(previousUserMessage);
-      if (productName) {
-        const quantity = Number(quantityFollowUp[1]);
-        return {
-          intent: "INVENTORY_SALE",
-          confidence: 0.98,
-          toolName: "recordSale",
-          parameters: { items: [{ name: productName, quantity }], sourceText: message },
-          requiresConfirmation: true,
-          response: `Sell ${quantity} ${quantity === 1 ? "unit" : "units"} of ${productName}? Reply YES to confirm or NO to cancel.`,
-        };
-      }
-    }
+    if (!quantityFollowUp) return null;
+
+    const previousUserMessage = [...history].reverse().find((entry) => entry.role === "user")?.content ?? "";
+    const productName = this.extractProductFromAvailabilityQuestion(previousUserMessage);
+    if (!productName) return null;
+
+    const quantity = Number(quantityFollowUp[1]);
+    return {
+      intent: "INVENTORY_SALE",
+      confidence: 0.98,
+      toolName: "recordSale",
+      parameters: { items: [{ name: productName, quantity }], sourceText: message },
+      requiresConfirmation: true,
+      response: `Sell ${quantity} ${quantity === 1 ? "unit" : "units"} of ${productName}? Reply YES to confirm or NO to cancel.`,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Deterministic fast-path — OFFLINE SAFETY NET ONLY.
+  // Only used when every LLM provider is unreachable. When the LLM is up it
+  // handles open-ended phrasing and parameter extraction; do not add patterns
+  // here expecting them to run on the happy path.
+  // ─────────────────────────────────────────────────────────────────────────
+  private classifyDeterministic(
+    message: string,
+    _history: { role: string; content: string }[] = []
+  ): ProposedAction | null {
+    const m = message.toLowerCase().trim();
 
     const availabilityMatch = m.match(/^(?:do you (?:have|sell|stock)|is there|have you got)\s+(.+?)(?:\?|$)/i);
     if (availabilityMatch?.[1]) {
@@ -431,6 +514,19 @@ export class AiService {
         requiresConfirmation: true,
         response:
           "This will delete all products with 0 stock. Reply YES to confirm or NO to cancel.",
+      };
+    }
+
+    // "delete/remove <product>" — a specific product (zero-stock handled above).
+    // The executor resolves the actual product name and confirms not-found.
+    if (/^\s*(?:please\s+)?(?:delete|remove|drop)\b/.test(m)) {
+      return {
+        intent: "INVENTORY_DELETE",
+        confidence: 0.8,
+        toolName: "deleteProduct",
+        parameters: { sourceText: message },
+        requiresConfirmation: true,
+        response: "Delete this product? Reply YES to confirm or NO to cancel.",
       };
     }
 
@@ -514,7 +610,7 @@ export class AiService {
     const ALL_TOOLS: ToolName[] = [
       "getStockLevel", "recordSale", "listProducts", "listTopDebtors",
       "debtSummary", "todaySales", "lowStockAlert", "listCustomers",
-      "createProduct", "deleteZeroStockProducts", "createInvoiceDraft",
+      "createProduct", "deleteProduct", "deleteZeroStockProducts", "createInvoiceDraft",
       "createCustomer", "recordDebt", "settleDebt", "unknown",
     ];
 
