@@ -72,9 +72,21 @@ FALLBACK
 ────────────────────────────────────────────────
 PARAMETER EXTRACTION RULES
 ────────────────────────────────────────────────
+Users phrase things freely (conversational, terse, Pidgin, typos, with or without
+₦/N, thousands like "20k" or "20,000"). Understand intent and extract what they
+MEAN, not just exact keywords. Normalise money: "5k"→5000, "1.5m"→1500000,
+"20,000"→20000. One message can contain multiple items.
+
 For recordSale — extract an "items" array:
   Each item: { "name": string, "quantity": number, "unitPrice": number }
-  Example: "sold 3 bags for 5000 each" → items: [{"name":"bags","quantity":3,"unitPrice":5000}]
+  - "quantity" is how many were sold; "unitPrice" is the price PER ONE.
+  - If the user gives a total, divide by quantity for unitPrice when obvious;
+    otherwise omit unitPrice and the system uses the product's saved price.
+  Examples:
+    "sold 3 bags for 5000 each" → [{"name":"bags","quantity":3,"unitPrice":5000}]
+    "I sell 2 crates of coke and 5 bread" →
+      [{"name":"coke","quantity":2},{"name":"bread","quantity":5}]
+    "comot 10 sachet milk 200 each" → [{"name":"sachet milk","quantity":10,"unitPrice":200}]
 
 For createProduct — extract:
   { "name": string, "sellingPrice": number, "unit": string, "initialQuantity": number }
@@ -88,18 +100,34 @@ For createProduct — extract:
 
 For createCustomer — extract:
   { "name": string, "phone": string | null }
+  - Pull the person/business name; capture a phone number if present, else null.
+  Examples:
+    "add a customer called Mama Nkechi 08031234567" →
+      {"name":"Mama Nkechi","phone":"08031234567"}
+    "new client Emeka Stores" → {"name":"Emeka Stores","phone":null}
 
 For recordDebt — extract:
   { "customerName": string, "amount": number }
+  - "customerName" is who owes; "amount" is what they owe (normalise money).
+  Examples:
+    "Emeka owes me 15k" → {"customerName":"Emeka","amount":15000}
+    "put 2,500 on Blessing's account" → {"customerName":"Blessing","amount":2500}
+    "Tunde collect goods on credit" → {"customerName":"Tunde","amount":0} (ask for amount)
   If amount is missing, set amount to 0 and ask for it in response.
 
 For settleDebt — extract:
-  { "customerName": string, "amount": number | null }
-  If amount is missing or user says full payment, set amount to null.
-  IMPORTANT: Only set settleAll=true if the user explicitly says ALL debts or everyone.
+  { "customerName": string, "amount": number | null, "settleAll": boolean }
+  - "amount" is what they paid; set null for a full payment / "cleared everything".
+  - settleAll=true ONLY when the user clearly means EVERYONE / ALL customers.
+  Examples:
+    "Emeka paid 5000" → {"customerName":"Emeka","amount":5000}
+    "Blessing don clear her debt" → {"customerName":"Blessing","amount":null}
+    "everyone has paid up" → {"settleAll":true,"amount":null}
 
 For getStockLevel — extract:
   { "productName": string }
+  Examples: "how many black tee remain" → {"productName":"black tee"};
+            "do you still get rice?" → {"productName":"rice"}
 
 ────────────────────────────────────────────────
 RESPONSE RULES
